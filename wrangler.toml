@@ -2,28 +2,49 @@ name = "opt-out-manager"
 main = "src/index.ts"
 compatibility_date = "2025-09-15"
 compatibility_flags = ["nodejs_compat"]
+account_id = "b487aa8136a1989c0718b148ecb02522"
 
-# Custom domain routing
+# Shared, non-secret vars. Secrets are set via `wrangler secret put --env <env>`.
+[vars]
+GOOGLE_HOSTED_DOMAIN = "coefficient.org"
+S3_REGION = "us-east-2"
+
+# ============================================
+# STAGING  ->  staging.optouts.coefficient.org
+# deployed from `staging` branch
+# ============================================
+[env.staging]
+name = "opt-out-manager-staging"
+routes = [
+  { pattern = "staging.optouts.coefficient.org", custom_domain = true }
+]
+
+[env.staging.vars]
+GOOGLE_HOSTED_DOMAIN = "coefficient.org"
+S3_REGION = "us-east-2"
+S3_BUCKET = "coefficient-client-portal-staging"
+APP_ENV = "staging"
+
+# ============================================
+# PRODUCTION  ->  optouts.coefficient.org
+# deployed from `main` branch
+# ============================================
+[env.production]
+name = "opt-out-manager"
 routes = [
   { pattern = "optouts.coefficient.org", custom_domain = true }
 ]
 
-# Non-secret vars go here. Secrets are set via `wrangler secret put`.
-[vars]
+[env.production.vars]
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
-# GOOGLE_CLIENT_ID is public-ish but set as a var for convenience; override per-env if needed.
-# GOOGLE_CLIENT_ID = "xxxx.apps.googleusercontent.com"
-S3_REGION = "us-east-1"
-# S3_BUCKET = "client-bucket-name"
+S3_REGION = "us-east-2"
+S3_BUCKET = "coefficient-client-portal"
+APP_ENV = "production"
 
-# --- Secrets to set (do NOT commit) ---
-# wrangler secret put GOOGLE_CLIENT_ID
-# wrangler secret put GOOGLE_CLIENT_SECRET
-# wrangler secret put SESSION_SECRET
-# wrangler secret put AWS_ACCESS_KEY_ID
-# wrangler secret put AWS_SECRET_ACCESS_KEY
-
-# Optional: KV for session storage (uncomment + set id after `wrangler kv namespace create SESSIONS`)
-# [[kv_namespaces]]
-# binding = "SESSIONS"
-# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# --- Secrets to set per environment (do NOT commit) ---
+# wrangler secret put GOOGLE_CLIENT_ID       --env staging
+# wrangler secret put GOOGLE_CLIENT_SECRET   --env staging
+# wrangler secret put SESSION_SECRET         --env staging
+# wrangler secret put AWS_ACCESS_KEY_ID      --env staging
+# wrangler secret put AWS_SECRET_ACCESS_KEY  --env staging
+# (repeat with --env production)

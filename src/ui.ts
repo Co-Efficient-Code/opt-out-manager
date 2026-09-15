@@ -1,5 +1,8 @@
 import type { SessionUser } from './types';
 
+// Note: XLSX is loaded as a browser global via CDN <script> in the page head;
+// it is only referenced inside the client-side <script> string, not here.
+
 const LOGO = 'https://app.coefficient.org/white-coefficient-logo.png';
 
 export function renderApp(user: SessionUser, appEnv: string): string {
@@ -10,6 +13,7 @@ export function renderApp(user: SessionUser, appEnv: string): string {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Opt-Out Manager</title>
 <link rel="icon" type="image/x-icon" href="https://app.coefficient.org/favicon.ico">
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -194,6 +198,21 @@ th{color:var(--muted);font-weight:600}
 </div>
 <script>
 const $=s=>document.querySelector(s);
+// Convert XLSX/XLS to a CSV File in the browser so only plain text is sent
+// (binary Office uploads are blocked by Cloudflare WAF at the edge).
+async function toUploadFile(file){
+  const nm=(file.name||'').toLowerCase();
+  if(!(nm.endsWith('.xlsx')||nm.endsWith('.xls')))return file; // already CSV/text
+  if(typeof XLSX==='undefined')throw new Error('Spreadsheet reader not loaded; check your connection and retry.');
+  const buf=await file.arrayBuffer();
+  const wb=XLSX.read(new Uint8Array(buf),{type:'array'});
+  const first=wb.SheetNames[0];
+  if(!first)throw new Error('Spreadsheet has no sheets.');
+  const csv=XLSX.utils.sheet_to_csv(wb.Sheets[first],{blankrows:false});
+  if(!csv.trim())throw new Error('Spreadsheet is empty.');
+  const csvName=(file.name||'upload').replace(/\\.(xlsx|xls)$/i,'')+'.csv';
+  return new File([csv],csvName,{type:'text/csv'});
+}
 // Fetch JSON; if the session expired the server redirects to an HTML login
 // page -> detect that and send the user to log in instead of choking on HTML.
 async function jsonFetch(url,opts){
@@ -311,7 +330,11 @@ async function autoPreview(){
   $('#p-preview-meta').innerHTML='';
   $('#p-preview-body').innerHTML='<span class="muted"><span class="spin"></span>Building preview...</span>';
   let d;
-  try{d=await jsonFetch('/api/preview',{method:'POST',body:(function(){const fd=new FormData();fd.append('org',org);fd.append('file',f);return fd;})()});}
+  try{
+    const up=await toUploadFile(f);
+    const fd=new FormData();fd.append('org',org);fd.append('file',up);
+    d=await jsonFetch('/api/preview',{method:'POST',body:fd});
+  }
   catch(e){$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+e.message+'</span>';$('#p-run').disabled=true;return;}
   if(d.error){$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+d.error+'</span>';$('#p-run').disabled=true;return;}
   $('#p-preview-meta').innerHTML='<span>File: <b>'+d.inputFile+'</b></span><span>PAC: <b>'+d.org+'</b></span><span>Rows in: <b>'+d.inputRows.toLocaleString()+'</b></span><span>Valid opt-outs: <b>'+d.validPhones.toLocaleString()+'</b></span><span>Skipped: <b>'+d.skipped.toLocaleString()+'</b></span>';
@@ -327,9 +350,13 @@ async function autoPreview(){
 $('#s-run').onclick=async()=>{
   const btn=$('#s-run');const org=$('#s-org').value;const f=s.file.files[0];
   btn.disabled=true;btn.innerHTML='<span class="spin"></span>Scrubbing...';
-  const fd=new FormData();fd.append('org',org);fd.append('file',f);
-  const colv=$('#s-col').value;if(colv!=='')fd.append('phoneCol',colv);
-  const r=await fetch('/api/scrub',{method:'POST',body:fd});const d=await r.json();
+  let d;
+  try{
+    const up=await toUploadFile(f);
+    const fd=new FormData();fd.append('org',org);fd.append('file',up);
+    const colv=$('#s-col').value;if(colv!=='')fd.append('phoneCol',colv);
+    const r=await fetch('/api/scrub',{method:'POST',body:fd});d=await r.json();
+  }catch(e){btn.innerHTML='Scrub list';btn.disabled=false;alert('Error: '+e.message);return;}
   btn.innerHTML='Scrub list';btn.disabled=false;
   if(d.error){alert('Error: '+d.error);return;}
   $('#r-file').textContent=d.inputFile;$('#r-org').textContent=d.org;
@@ -344,9 +371,10 @@ $('#s-run').onclick=async()=>{
   $('#s-result').classList.remove('hide');
   $('#s-result').scrollIntoView({behavior:'smooth'});
 };
-$('#s-dl').onclick=()=>{
+$('#s-dl').onclick=async()=>{
   const org=$('#s-org').value;const f=s.file.files[0];
-  const fd=new FormData();fd.append('org',org);fd.append('file',f);
+  const up=await toUploadFile(f);
+  const fd=new FormData();fd.append('org',org);fd.append('file',up);
   const colv=$('#s-col').value;if(colv!=='')fd.append('phoneCol',colv);
   fetch('/api/scrub?download=1',{method:'POST',body:fd}).then(r=>r.blob()).then(b=>{
     const a=document.createElement('a');a.href=URL.createObjectURL(b);
@@ -359,10 +387,13 @@ $('#s-reset').onclick=()=>{$('#s-result').classList.add('hide');s.file.value='';
 $('#p-run').onclick=async()=>{
   if(!previewOk){$('#p-out').innerHTML='<b>Please preview the file first.</b>';$('#p-result').classList.remove('hide');return;}
   const org=$('#p-org').value;const dest=$('#p-dest').value;const f=p.file.files[0];
-  const fd=new FormData();fd.append('org',org);fd.append('dest',dest);fd.append('file',f);
   const btn=$('#p-run');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Uploading...';
   let d;
-  try{d=await jsonFetch('/api/push',{method:'POST',body:fd});}
+  try{
+    const up=await toUploadFile(f);
+    const fd=new FormData();fd.append('org',org);fd.append('dest',dest);fd.append('file',up);
+    d=await jsonFetch('/api/push',{method:'POST',body:fd});
+  }
   catch(e){btn.innerHTML='Upload opt-outs';btn.disabled=false;$('#p-out').innerHTML='<b>'+e.message+'</b>';$('#p-result').classList.remove('hide');return;}
   btn.innerHTML='Upload opt-outs';btn.disabled=false;
   let html='<b>'+(d.message||d.error||'')+'</b>';

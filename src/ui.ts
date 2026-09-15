@@ -180,17 +180,20 @@ th{color:var(--muted);font-weight:600}
       </select>
       <label>Account (PAC)</label>
       <select id="p-org"><option value="">Select a destination first...</option></select>
-      <label>Opt-out list (CSV)</label>
+      <label>Opt-out list (CSV or Excel)</label>
       <div class="drop" id="p-drop">Drop a CSV or Excel file here or click to choose<input type="file" id="p-file" accept=".csv,.xlsx,.xls" class="hide"></div>
-      <div class="note">TEST MODE: uploads are allowed only for the test account <b>testing-nightly-batch</b>. Real client PACs are blocked until testing is verified. Files are never overwritten.</div>
-      <div class="row" style="margin-top:16px">
-        <button class="btn" id="p-run" disabled title="Preview must succeed first">Upload opt-outs</button>
-        <span id="p-fname" class="muted"></span>
+      <div class="row hide" id="p-filerow" style="margin-top:6px">
+        <span class="muted">File: <b id="p-fname"></b></span>
+        <a href="#" id="p-change" style="font-size:13px">Change file</a>
       </div>
+      <div class="note" style="margin-top:14px">TEST MODE: uploads are allowed only for the test account <b>testing-nightly-batch</b>. Real client PACs are blocked until testing is verified. Files are never overwritten.</div>
     </div>
     <div class="card hide" id="p-preview-card">
-      <h2>Preview (what will be written)</h2>
-      <div class="meta" id="p-preview-meta"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <h2>Preview</h2>
+        <button class="btn" id="p-run" disabled title="Preview must succeed first">Upload opt-outs</button>
+      </div>
+      <div class="meta" id="p-preview-meta" style="margin-top:10px"></div>
       <div id="p-preview-body" style="margin-top:10px"></div>
     </div>
     <div class="card hide" id="p-result"><h2>Result</h2><div id="p-out" class="muted"></div></div>
@@ -307,6 +310,14 @@ function guessPhoneCol(header){const n=header.map(h=>h.trim().toLowerCase());con
 const s=wireDrop('#s-drop','#s-file','#s-fname','#s-run','#s-org');
 s.colwrap='#s-colwrap';s.col='#s-col';
 const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org','#p-dest');
+// Show file row + hide drop zone once a file is chosen; restore on "Change file".
+function pFileUI(){
+  const f=p.file.files[0];
+  if(f){$('#p-drop').classList.add('hide');$('#p-filerow').classList.remove('hide');}
+  else{$('#p-drop').classList.remove('hide');$('#p-filerow').classList.add('hide');}
+}
+$('#p-file').addEventListener('change',pFileUI);
+$('#p-change').addEventListener('click',(e)=>{e.preventDefault();$('#p-file').value='';pFileUI();invalidatePreview();});
 // Upload requires a successful preview. Any change invalidates it.
 let previewOk=false;
 function invalidatePreview(){
@@ -337,7 +348,7 @@ async function autoPreview(){
   }
   catch(e){$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+e.message+'</span>';$('#p-run').disabled=true;return;}
   if(d.error){$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+d.error+'</span>';$('#p-run').disabled=true;return;}
-  $('#p-preview-meta').innerHTML='<span>Will be saved as: <b>'+(d.outputFile||'')+'</b></span><span>PAC: <b>'+d.org+'</b></span><span>Rows in: <b>'+d.inputRows.toLocaleString()+'</b></span><span>Valid opt-outs: <b>'+d.validPhones.toLocaleString()+'</b></span><span>Skipped: <b>'+d.skipped.toLocaleString()+'</b></span>';
+  $('#p-preview-meta').innerHTML='<span><b>'+(d.outputFile||'')+'</b></span><span>Rows in: <b>'+d.inputRows.toLocaleString()+'</b></span><span>Valid opt-outs: <b>'+d.validPhones.toLocaleString()+'</b></span><span>Skipped: <b>'+d.skipped.toLocaleString()+'</b></span>';
   let body='<table class="btable"><thead><tr><th>organization</th><th>phone</th></tr></thead><tbody>';
   d.previewRows.slice(1).forEach(function(row){var c=row.split(',');body+='<tr><td>'+(c[0]||'')+'</td><td>'+(c[1]||'')+'</td></tr>';});
   body+='</tbody></table>';

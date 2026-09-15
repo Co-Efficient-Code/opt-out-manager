@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import type { Env, SessionUser } from './types';
 import { authRoutes, requireAuth } from './auth';
-import { listAccounts, filesForOrg } from './accounts';
+import { listAccounts, listAccountsForRole, filesForOrg } from './accounts';
+import type { SyncRole } from './s3';
 import { scrubContacts, buildOptOutSet } from './scrub';
 import { renderApp } from './ui';
 
@@ -29,6 +30,18 @@ const api = new Hono<{ Bindings: Env; Variables: Variables }>();
 api.get('/accounts', async (c) => {
   try {
     return c.json({ accounts: await listAccounts(c.env) });
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
+});
+
+// List PAC accounts for a specific destination bucket (read-only).
+api.get('/accounts/dest/:dest', async (c) => {
+  const map: Record<string, SyncRole> = { bigdog: 'bigdog', creativedirect: 'creativedirect' };
+  const role = map[c.req.param('dest')];
+  if (!role) return c.json({ error: 'invalid destination' }, 400);
+  try {
+    return c.json({ dest: c.req.param('dest'), accounts: await listAccountsForRole(c.env, role) });
   } catch (e) {
     return c.json({ error: String(e) }, 502);
   }

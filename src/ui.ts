@@ -152,7 +152,7 @@ th{color:var(--muted);font-weight:600}
         <option value="creativedirect">Creative Direct</option>
       </select>
       <label>Account (PAC)</label>
-      <select id="p-org"><option value="">Loading accounts...</option></select>
+      <select id="p-org"><option value="">Select a destination first...</option></select>
       <label>Opt-out list (CSV)</label>
       <div class="drop" id="p-drop">Drop a CSV here or click to choose<input type="file" id="p-file" accept=".csv" class="hide"></div>
       <div class="note">Writes to client S3 buckets are turned off. This will validate and preview only, without pushing anything.</div>
@@ -172,8 +172,25 @@ async function loadAccounts(){
   accounts=d.accounts||[];
   const opts='<option value="">Select a PAC...</option>'+accounts.map(a=>
     '<option value="'+a.org+'">'+a.org+' ('+a.fileCount+' files)</option>').join('');
-  $('#s-org').innerHTML=opts;$('#p-org').innerHTML=opts;
+  $('#s-org').innerHTML=opts;
 }
+// Upload PAC list is scoped to the chosen destination bucket.
+async function loadDestAccounts(dest){
+  const sel=$('#p-org');
+  if(!dest){sel.innerHTML='<option value="">Select a destination first...</option>';return;}
+  sel.innerHTML='<option value="">Loading accounts...</option>';
+  try{
+    const r=await fetch('/api/accounts/dest/'+dest);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    const accts=d.accounts||[];
+    sel.innerHTML='<option value="">Select a PAC...</option>'+accts.map(a=>
+      '<option value="'+a.org+'">'+a.org+' ('+a.fileCount+' files)</option>').join('');
+  }catch(e){
+    sel.innerHTML='<option value="">Failed to load ('+e.message+')</option>';
+  }
+}
+$('#p-dest').addEventListener('change',()=>loadDestAccounts($('#p-dest').value));
 // tabs
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
@@ -198,8 +215,8 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
     $(btnId).disabled=!ready;
     if(f&&opts.colwrap)populateCols(f);
   }
-  $(orgId).onchange=onpick;
-  if(destId)$(destId).onchange=onpick;
+  $(orgId).addEventListener('change',onpick);
+  if(destId)$(destId).addEventListener('change',onpick);
   const opts={file,colwrap:null,col:null};
   function populateCols(f){
     const reader=new FileReader();

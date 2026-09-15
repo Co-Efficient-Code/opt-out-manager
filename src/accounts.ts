@@ -1,5 +1,6 @@
 import type { Env } from './types';
 import { listObjects } from './s3';
+import type { SyncRole } from './s3';
 
 export interface AccountFile {
   key: string;        // full S3 key: optouts/<org>/<file>.csv
@@ -40,17 +41,32 @@ function orgFromKey(key: string): string | null {
   return parts[1] || null;
 }
 
+/** List all opt-out files in a given bucket role. Read-only. */
+export async function listFilesForRole(env: Env, role: SyncRole): Promise<AccountFile[]> {
+  const res = await listObjects(env, role, 'optouts/');
+  const xml = await res.text();
+  if (!res.ok) throw new Error(`${role} list failed: ${res.status}`);
+  return parseListXml(xml);
+}
+
 /** List all opt-out files in the SOURCE (p2p) bucket. Read-only. */
 export async function listSourceFiles(env: Env): Promise<AccountFile[]> {
-  const res = await listObjects(env, 'source', 'optouts/');
-  const xml = await res.text();
-  if (!res.ok) throw new Error(`source list failed: ${res.status}`);
-  return parseListXml(xml);
+  return listFilesForRole(env, 'source');
+}
+
+/** Derive the account (PAC) list from a bucket role's prefixes. */
+export async function listAccountsForRole(env: Env, role: SyncRole): Promise<Account[]> {
+  const files = await listFilesForRole(env, role);
+  return buildAccounts(files);
 }
 
 /** Derive the account (PAC) list from the source bucket prefixes. */
 export async function listAccounts(env: Env): Promise<Account[]> {
   const files = await listSourceFiles(env);
+  return buildAccounts(files);
+}
+
+function buildAccounts(files: AccountFile[]): Account[] {
   const byOrg = new Map<string, AccountFile[]>();
   for (const f of files) {
     const org = orgFromKey(f.key);

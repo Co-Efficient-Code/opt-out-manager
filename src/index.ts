@@ -1,77 +1,111 @@
 import { Hono } from 'hono';
 import type { Env, SessionUser } from './types';
 import { authRoutes, requireAuth } from './auth';
-import { getObject, listObjects, pushToAll } from './s3';
+import { listAccounts, filesForOrg } from './accounts';
+import { scrubContacts, buildOptOutSet } from './scrub';
+import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
 
+// HARD SAFETY SWITCH: writes to client S3 buckets are disabled.
+const ALLOW_BUCKET_WRITES = false;
+
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// Public health check
 app.get('/health', (c) =>
   c.json({ ok: true, service: 'opt-out-manager', env: c.env.APP_ENV ?? 'unknown' }),
 );
 
-// Auth routes (login/callback/logout)
 app.route('/auth', authRoutes);
-
-// Everything below requires a signed-in coefficient.org user
 app.use('*', requireAuth());
 
-app.get('/', (c) => {
-  const user = c.get('user');
-  return c.html(`<!doctype html>
-<html><head><meta charset="utf-8"><title>Opt-Out Manager</title>
-<style>body{font-family:system-ui,sans-serif;max-width:760px;margin:3rem auto;padding:0 1rem}</style>
-</head><body>
-<h1>Opt-Out Manager <small>(${c.env.APP_ENV ?? ''})</small></h1>
-<p>Signed in as <strong>${user.email}</strong>. <a href="/auth/logout">Log out</a></p>
-<h2>Data flow</h2>
-<ul>
-  <li>PULL from <code>datadash-p2p</code> (vendor opt-outs)</li>
-  <li>PUSH to <code>datadash-bigdogstrategies</code> and <code>datadash-creativedirect</code></li>
-</ul>
-<ul>
-  <li><a href="/api/source">List source opt-outs (p2p)</a></li>
-</ul>
-</body></html>`);
-});
+// --- UI ---
+app.get('/', (c) => c.html(renderApp(c.get('user'), c.env.APP_ENV ?? '')));
 
 // --- API ---
 const api = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// List objects available in the SOURCE (p2p) bucket
-api.get('/source', async (c) => {
-  const res = await listObjects(c.env, 'source', 'optouts/');
-  const xml = await res.text();
-  if (!res.ok) return c.json({ error: 'source list failed', status: res.status, body: xml }, 502);
-  return c.text(xml, 200, { 'Content-Type': 'application/xml' });
+// List PAC accounts (read-only, derived from p2p prefixes)
+api.get('/accounts', async (c) => {
+  try {
+    return c.json({ accounts: await listAccounts(c.env) });
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
 });
 
-// Pull a single record from the SOURCE (p2p) bucket
-api.get('/source/:key', async (c) => {
-  const res = await getObject(c.env, 'source', `optouts/${c.req.param('key')}`);
-  if (!res.ok) return c.json({ error: 'not found', status: res.status }, res.status as any);
-  return new Response(res.body, { headers: { 'Content-Type': 'application/json' } });
+// Files for one account
+api.get('/accounts/:org/files', async (c) => {
+  try {
+    return c.json({ org: c.req.param('org'), files: await filesForOrg(c.env, c.req.param('org')) });
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
 });
 
-// Push a record to BOTH destinations (bigdog + creativedirect)
-api.put('/push/:key', async (c) => {
-  const body = await c.req.text();
-  const results = await pushToAll(c.env, `optouts/${c.req.param('key')}`, body);
-  const allOk = results.every((r) => r.ok);
-  return c.json({ ok: allOk, key: c.req.param('key'), results }, allOk ? 200 : 502);
+// Opt-out set summary for an account (count only, read-only)
+api.get('/accounts/:org/optouts/summary', async (c) => {
+  try {
+    const set = await buildOptOutSet(c.env, c.req.param('org'));
+    return c.json({ org: c.req.param('org'), optOutCount: set.size });
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
 });
 
-// Sync: pull a key from source, fan out to both destinations
-api.post('/sync/:key', async (c) => {
-  const key = `optouts/${c.req.param('key')}`;
-  const src = await getObject(c.env, 'source', key);
-  if (!src.ok) return c.json({ error: 'source fetch failed', status: src.status }, 502);
-  const body = await src.arrayBuffer();
-  const results = await pushToAll(c.env, key, body);
-  const allOk = results.every((r) => r.ok);
-  return c.json({ ok: allOk, key: c.req.param('key'), synced: results }, allOk ? 200 : 502);
+// SCRUB: upload a contact CSV, pick a PAC, get a cleaned file + stats.
+// multipart form: file=<csv>, org=<pac>
+api.post('/scrub', async (c) => {
+  const form = await c.req.formData();
+  const org = String(form.get('org') || '');
+  const file = form.get('file');
+  if (!org) return c.json({ error: 'missing org' }, 400);
+  if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
+  const csv = await file.text();
+  try {
+    const result = await scrubContacts(c.env, org, csv);
+    const download = c.req.query('download') === '1';
+    if (download) {
+      const base = (file.name || 'contacts').replace(/\.csv$/i, '');
+      return new Response(result.cleanedCsv, {
+        headers: {
+          'Content-Type': 'text/csv',
+          'Content-Disposition': `attachment; filename="${base}_scrubbed_${org}.csv"`,
+        },
+      });
+    }
+    // return stats + cleaned csv inline (no download)
+    return c.json({
+      inputFile: file.name,
+      ...result,
+      cleanedCsv: undefined, // omit body from JSON summary
+    });
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
+});
+
+// PUSH: DISABLED. Accepts request, validates, but never writes to a bucket.
+api.post('/push', async (c) => {
+  const form = await c.req.formData();
+  const org = String(form.get('org') || '');
+  const file = form.get('file');
+  const fileName = file instanceof File ? file.name : null;
+  if (!ALLOW_BUCKET_WRITES) {
+    return c.json({
+      ok: false,
+      dryRun: true,
+      wrote: false,
+      message: 'Bucket writes are DISABLED. This is a dry run. No data was pushed to any S3 bucket.',
+      wouldPush: {
+        org,
+        file: fileName,
+        destinations: ['datadash-bigdogstrategies', 'datadash-creativedirect'],
+      },
+    }, 200);
+  }
+  // (unreachable while writes disabled)
+  return c.json({ error: 'not implemented' }, 501);
 });
 
 app.route('/api', api);

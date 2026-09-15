@@ -1,0 +1,199 @@
+import type { SessionUser } from './types';
+
+const LOGO = 'https://app.coefficient.org/white-coefficient-logo.png';
+
+export function renderApp(user: SessionUser, appEnv: string): string {
+  const envBadge = appEnv && appEnv !== 'production'
+    ? `<span class="badge">${appEnv}</span>` : '';
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Opt-Out Manager</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0a1628; --card:#0f1f3a; --accent:#E27124; --blue:#245EA4; --navy:#02316B;
+  --text:#e2e8f0; --muted:#94a3b8; --subtle:#64748b; --border:#1e2f4d;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:'DM Sans',system-ui,sans-serif}
+h1,h2,h3{font-family:'Inter',sans-serif;margin:0}
+a{color:var(--blue)}
+.top{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;border-bottom:1px solid var(--border)}
+.top img{height:26px}
+.top .who{color:var(--muted);font-size:14px}
+.top .who a{color:var(--muted);margin-left:14px;text-decoration:none}
+.badge{background:var(--accent);color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:10px;text-transform:uppercase;letter-spacing:.5px}
+.wrap{max-width:960px;margin:32px auto;padding:0 24px}
+.tabs{display:flex;gap:8px;margin-bottom:24px}
+.tab{background:var(--card);border:1px solid var(--border);color:var(--muted);padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:600;font-family:'Inter'}
+.tab.active{color:#fff;border-color:var(--accent);background:linear-gradient(180deg,var(--card),#12294a)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:20px}
+.card h2{font-size:18px;margin-bottom:6px}
+.card p.sub{color:var(--muted);margin:0 0 18px;font-size:14px}
+label{display:block;color:var(--muted);font-size:13px;margin:14px 0 6px;font-weight:500}
+select,input[type=file]{width:100%;background:#0a1628;border:1px solid var(--border);color:var(--text);padding:11px 12px;border-radius:8px;font-family:inherit;font-size:14px}
+.drop{border:2px dashed var(--border);border-radius:10px;padding:26px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
+.drop.hot{border-color:var(--accent);color:var(--text);background:#0c1d38}
+.btn{background:var(--accent);color:#fff;border:none;padding:12px 22px;border-radius:8px;font-weight:600;cursor:pointer;font-family:'Inter';font-size:14px}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn.ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
+.row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:8px}
+.stat{background:#0a1628;border:1px solid var(--border);border-radius:10px;padding:16px}
+.stat .n{font-family:'Inter';font-size:26px;font-weight:700}
+.stat .n.good{color:#4ade80}.stat .n.warn{color:var(--accent)}
+.stat .l{color:var(--muted);font-size:12px;margin-top:2px}
+.meta{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:13px;margin:10px 0 0}
+.meta b{color:var(--text)}
+.note{background:#1a1206;border:1px solid #5a3a12;color:#f3c99a;padding:12px 14px;border-radius:8px;font-size:13px;margin-top:14px}
+.muted{color:var(--muted)} .hide{display:none}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes s{to{transform:rotate(360deg)}}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
+th{color:var(--muted);font-weight:600}
+</style></head>
+<body>
+<div class="top">
+  <img src="${LOGO}" alt="co/efficient">${envBadge}
+  <div class="who">${user.email} <a href="/auth/logout">Sign out</a></div>
+</div>
+<div class="wrap">
+  <div class="tabs">
+    <div class="tab active" data-tab="scrub">Scrub a list</div>
+    <div class="tab" data-tab="push">Upload opt-outs</div>
+  </div>
+
+  <!-- SCRUB -->
+  <div id="scrub">
+    <div class="card">
+      <h2>Scrub a contact list</h2>
+      <p class="sub">Remove existing opt-outs from a list before you send. Reads opt-outs for the selected PAC. Nothing is written to any bucket.</p>
+      <label>Account (PAC)</label>
+      <select id="s-org"><option value="">Loading accounts...</option></select>
+      <label>Contact list (CSV)</label>
+      <div class="drop" id="s-drop">Drop a CSV here or click to choose<input type="file" id="s-file" accept=".csv" class="hide"></div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn" id="s-run" disabled>Scrub list</button>
+        <span id="s-fname" class="muted"></span>
+      </div>
+    </div>
+    <div class="card hide" id="s-result">
+      <h2>Results</h2>
+      <div class="meta">
+        <span>File: <b id="r-file"></b></span>
+        <span>PAC: <b id="r-org"></b></span>
+        <span>Phone column: <b id="r-col"></b></span>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="n" id="r-in">0</div><div class="l">Input rows</div></div>
+        <div class="stat"><div class="n warn" id="r-scrub">0</div><div class="l">Opt-outs scrubbed</div></div>
+        <div class="stat"><div class="n good" id="r-kept">0</div><div class="l">Records kept</div></div>
+        <div class="stat"><div class="n" id="r-set">0</div><div class="l">PAC opt-out list size</div></div>
+      </div>
+      <div class="note hide" id="r-unparse"></div>
+      <div class="row" style="margin-top:18px">
+        <button class="btn" id="s-dl">Download scrubbed CSV</button>
+        <button class="btn ghost" id="s-reset">Scrub another</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PUSH -->
+  <div id="push" class="hide">
+    <div class="card">
+      <h2>Upload opt-outs</h2>
+      <p class="sub">After a send, upload the new opt-out list for a PAC. Writes are currently DISABLED (dry run only) to protect client data.</p>
+      <label>Account (PAC)</label>
+      <select id="p-org"><option value="">Loading accounts...</option></select>
+      <label>Opt-out list (CSV)</label>
+      <div class="drop" id="p-drop">Drop a CSV here or click to choose<input type="file" id="p-file" accept=".csv" class="hide"></div>
+      <div class="note">Writes to client S3 buckets are turned off. This will validate and preview only, without pushing anything.</div>
+      <div class="row" style="margin-top:16px">
+        <button class="btn" id="p-run" disabled>Preview push (dry run)</button>
+        <span id="p-fname" class="muted"></span>
+      </div>
+    </div>
+    <div class="card hide" id="p-result"><h2>Dry run</h2><div id="p-out" class="muted"></div></div>
+  </div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+let accounts=[];
+async function loadAccounts(){
+  const r=await fetch('/api/accounts');const d=await r.json();
+  accounts=d.accounts||[];
+  const opts='<option value="">Select a PAC...</option>'+accounts.map(a=>
+    '<option value="'+a.org+'">'+a.org+' ('+a.fileCount+' files)</option>').join('');
+  $('#s-org').innerHTML=opts;$('#p-org').innerHTML=opts;
+}
+// tabs
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  t.classList.add('active');
+  $('#scrub').classList.toggle('hide',t.dataset.tab!=='scrub');
+  $('#push').classList.toggle('hide',t.dataset.tab!=='push');
+});
+// drag/drop wiring
+function wireDrop(dropId,fileId,fnameId,btnId,orgId){
+  const drop=$(dropId),file=$(fileId);
+  drop.onclick=()=>file.click();
+  ['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('hot')}));
+  ['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('hot')}));
+  drop.addEventListener('drop',ev=>{if(ev.dataTransfer.files[0]){file.files=ev.dataTransfer.files;onpick()}});
+  file.onchange=onpick;
+  function onpick(){
+    const f=file.files[0];
+    $(fnameId).textContent=f?f.name:'';
+    const ready=!!f && !!$(orgId).value;
+    $(btnId).disabled=!ready;
+  }
+  $(orgId).onchange=onpick;
+  return {file};
+}
+const s=wireDrop('#s-drop','#s-file','#s-fname','#s-run','#s-org');
+const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org');
+
+// scrub
+$('#s-run').onclick=async()=>{
+  const btn=$('#s-run');const org=$('#s-org').value;const f=s.file.files[0];
+  btn.disabled=true;btn.innerHTML='<span class="spin"></span>Scrubbing...';
+  const fd=new FormData();fd.append('org',org);fd.append('file',f);
+  const r=await fetch('/api/scrub',{method:'POST',body:fd});const d=await r.json();
+  btn.innerHTML='Scrub list';btn.disabled=false;
+  if(d.error){alert('Error: '+d.error);return;}
+  $('#r-file').textContent=d.inputFile;$('#r-org').textContent=d.org;$('#r-col').textContent=d.phoneColumn;
+  $('#r-in').textContent=d.inputRows.toLocaleString();
+  $('#r-scrub').textContent=d.scrubbed.toLocaleString();
+  $('#r-kept').textContent=d.kept.toLocaleString();
+  $('#r-set').textContent=d.optOutSetSize.toLocaleString();
+  const u=$('#r-unparse');
+  if(d.unparseablePhones>0){u.classList.remove('hide');u.textContent=d.unparseablePhones.toLocaleString()+' rows had unreadable phone numbers and were kept (not scrubbed). Check the phone column.';}
+  else u.classList.add('hide');
+  $('#s-result').classList.remove('hide');
+  $('#s-result').scrollIntoView({behavior:'smooth'});
+};
+$('#s-dl').onclick=()=>{
+  const org=$('#s-org').value;const f=s.file.files[0];
+  const fd=new FormData();fd.append('org',org);fd.append('file',f);
+  fetch('/api/scrub?download=1',{method:'POST',body:fd}).then(r=>r.blob()).then(b=>{
+    const a=document.createElement('a');a.href=URL.createObjectURL(b);
+    a.download=f.name.replace(/\\.csv$/i,'')+'_scrubbed_'+org+'.csv';a.click();
+  });
+};
+$('#s-reset').onclick=()=>{$('#s-result').classList.add('hide');s.file.value='';$('#s-fname').textContent='';$('#s-run').disabled=true;};
+
+// push (dry run)
+$('#p-run').onclick=async()=>{
+  const org=$('#p-org').value;const f=p.file.files[0];
+  const fd=new FormData();fd.append('org',org);fd.append('file',f);
+  const r=await fetch('/api/push',{method:'POST',body:fd});const d=await r.json();
+  $('#p-out').innerHTML='<b>'+(d.message||'')+'</b><br>Would push <b>'+(d.wouldPush?.file||'')+'</b> for <b>'+(d.wouldPush?.org||'')+'</b> to: '+(d.wouldPush?.destinations||[]).join(', ');
+  $('#p-result').classList.remove('hide');
+};
+loadAccounts();
+</script>
+</body></html>`;
+}

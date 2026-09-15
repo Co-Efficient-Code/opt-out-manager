@@ -160,7 +160,7 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId){
   function populateCols(f){
     const reader=new FileReader();
     reader.onload=()=>{
-      const firstLine=String(reader.result).split(/\r?\n/)[0]||'';
+      const firstLine=String(reader.result).split(/\\r?\\n/)[0]||'';
       const cols=splitCsvClient(firstLine);
       const auto=guessPhoneCol(cols);
       const sel=$(opts.col);

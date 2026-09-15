@@ -75,6 +75,10 @@ th{color:var(--muted);font-weight:600}
       <select id="s-org"><option value="">Loading accounts...</option></select>
       <label>Contact list (CSV)</label>
       <div class="drop" id="s-drop">Drop a CSV here or click to choose<input type="file" id="s-file" accept=".csv" class="hide"></div>
+      <div id="s-colwrap" class="hide">
+        <label>Phone column <span class="muted" style="font-weight:400">(auto-detected, override if needed)</span></label>
+        <select id="s-col"><option value="">Auto-detect</option></select>
+      </div>
       <div class="row" style="margin-top:16px">
         <button class="btn" id="s-run" disabled>Scrub list</button>
         <span id="s-fname" class="muted"></span>
@@ -149,11 +153,30 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId){
     $(fnameId).textContent=f?f.name:'';
     const ready=!!f && !!$(orgId).value;
     $(btnId).disabled=!ready;
+    if(f&&opts.colwrap)populateCols(f);
   }
   $(orgId).onchange=onpick;
-  return {file};
+  const opts={file,colwrap:null,col:null};
+  function populateCols(f){
+    const reader=new FileReader();
+    reader.onload=()=>{
+      const firstLine=String(reader.result).split(/\r?\n/)[0]||'';
+      const cols=splitCsvClient(firstLine);
+      const auto=guessPhoneCol(cols);
+      const sel=$(opts.col);
+      sel.innerHTML='<option value="">Auto-detect'+(auto>=0?' ('+cols[auto]+')':'')+'</option>'+
+        cols.map((c,i)=>'<option value="'+i+'">'+(c||('col '+i))+'</option>').join('');
+      $(opts.colwrap).classList.remove('hide');
+    };
+    reader.readAsText(f.slice(0,64*1024));
+  }
+  return opts;
 }
+// client-side CSV header split + phone guess (mirror of server logic)
+function splitCsvClient(line){const out=[];let cur='',q=false;for(let i=0;i<line.length;i++){const ch=line[i];if(q){if(ch==='"'&&line[i+1]==='"'){cur+='"';i++;}else if(ch==='"')q=false;else cur+=ch;}else{if(ch==='"')q=true;else if(ch===','){out.push(cur);cur='';}else cur+=ch;}}out.push(cur);return out;}
+function guessPhoneCol(header){const n=header.map(h=>h.trim().toLowerCase());const c=['phone','phone number','phonenumber','cell','mobile','phone_number'];for(const x of c){const i=n.indexOf(x);if(i>=0)return i;}return n.findIndex(h=>h.includes('phone'));}
 const s=wireDrop('#s-drop','#s-file','#s-fname','#s-run','#s-org');
+s.colwrap='#s-colwrap';s.col='#s-col';
 const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org');
 
 // scrub
@@ -161,10 +184,12 @@ $('#s-run').onclick=async()=>{
   const btn=$('#s-run');const org=$('#s-org').value;const f=s.file.files[0];
   btn.disabled=true;btn.innerHTML='<span class="spin"></span>Scrubbing...';
   const fd=new FormData();fd.append('org',org);fd.append('file',f);
+  const colv=$('#s-col').value;if(colv!=='')fd.append('phoneCol',colv);
   const r=await fetch('/api/scrub',{method:'POST',body:fd});const d=await r.json();
   btn.innerHTML='Scrub list';btn.disabled=false;
   if(d.error){alert('Error: '+d.error);return;}
-  $('#r-file').textContent=d.inputFile;$('#r-org').textContent=d.org;$('#r-col').textContent=d.phoneColumn;
+  $('#r-file').textContent=d.inputFile;$('#r-org').textContent=d.org;
+  $('#r-col').textContent=d.phoneColumn+(d.autoDetected?' (auto)':' (manual)');
   $('#r-in').textContent=d.inputRows.toLocaleString();
   $('#r-scrub').textContent=d.scrubbed.toLocaleString();
   $('#r-kept').textContent=d.kept.toLocaleString();
@@ -178,12 +203,13 @@ $('#s-run').onclick=async()=>{
 $('#s-dl').onclick=()=>{
   const org=$('#s-org').value;const f=s.file.files[0];
   const fd=new FormData();fd.append('org',org);fd.append('file',f);
+  const colv=$('#s-col').value;if(colv!=='')fd.append('phoneCol',colv);
   fetch('/api/scrub?download=1',{method:'POST',body:fd}).then(r=>r.blob()).then(b=>{
     const a=document.createElement('a');a.href=URL.createObjectURL(b);
     a.download=f.name.replace(/\\.csv$/i,'')+'_scrubbed_'+org+'.csv';a.click();
   });
 };
-$('#s-reset').onclick=()=>{$('#s-result').classList.add('hide');s.file.value='';$('#s-fname').textContent='';$('#s-run').disabled=true;};
+$('#s-reset').onclick=()=>{$('#s-result').classList.add('hide');s.file.value='';$('#s-fname').textContent='';$('#s-run').disabled=true;$('#s-colwrap').classList.add('hide');};
 
 // push (dry run)
 $('#p-run').onclick=async()=>{

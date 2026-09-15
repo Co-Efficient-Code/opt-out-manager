@@ -71,6 +71,8 @@ export interface ScrubResult {
   org: string;
   inputRows: number;
   phoneColumn: string;
+  phoneColumnIndex: number;
+  autoDetected: boolean;
   optOutSetSize: number;
   scrubbed: number;      // rows removed (matched an opt-out)
   kept: number;          // rows remaining
@@ -87,11 +89,15 @@ export async function scrubContacts(
   env: Env,
   org: string,
   csv: string,
+  phoneColOverride?: number,
 ): Promise<ScrubResult> {
   const optOuts = await buildOptOutSet(env, org);
   const lines = csv.split(/\r?\n/);
   const header = splitCsvLine(lines[0] ?? '');
-  let phoneIdx = findPhoneColumn(header);
+  let phoneIdx =
+    typeof phoneColOverride === 'number' && phoneColOverride >= 0 && phoneColOverride < header.length
+      ? phoneColOverride
+      : findPhoneColumn(header);
   if (phoneIdx < 0) phoneIdx = 0;
 
   const outLines: string[] = [lines[0] ?? ''];
@@ -113,6 +119,8 @@ export async function scrubContacts(
     org,
     inputRows,
     phoneColumn: header[phoneIdx] ?? `col ${phoneIdx}`,
+    phoneColumnIndex: phoneIdx,
+    autoDetected: typeof phoneColOverride !== 'number',
     optOutSetSize: optOuts.size,
     scrubbed,
     kept: inputRows - scrubbed,

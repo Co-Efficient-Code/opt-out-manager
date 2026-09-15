@@ -59,11 +59,16 @@ api.post('/scrub', async (c) => {
   const form = await c.req.formData();
   const org = String(form.get('org') || '');
   const file = form.get('file');
+  const phoneColRaw = form.get('phoneCol');
+  const phoneCol =
+    phoneColRaw != null && String(phoneColRaw) !== ''
+      ? parseInt(String(phoneColRaw), 10)
+      : undefined;
   if (!org) return c.json({ error: 'missing org' }, 400);
   if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
   const csv = await file.text();
   try {
-    const result = await scrubContacts(c.env, org, csv);
+    const result = await scrubContacts(c.env, org, csv, phoneCol);
     const download = c.req.query('download') === '1';
     if (download) {
       const base = (file.name || 'contacts').replace(/\.csv$/i, '');

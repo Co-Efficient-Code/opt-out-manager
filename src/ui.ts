@@ -254,10 +254,10 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
   file.onchange=onpick;
   function onpick(){
     const f=file.files[0];
-    $(fnameId).textContent=f?f.name:'';
+    var fn=$(fnameId);if(fn)fn.textContent=f?f.name:'';
     const destOk=!destId || !!$(destId).value;
     const ready=!!f && !!$(orgId).value && destOk;
-    $(btnId).disabled=!ready;
+    var b=$(btnId);if(b)b.disabled=!ready;
     if(f&&opts.colwrap)populateCols(f);
     if(opts.onReady)opts.onReady(ready);
   }
@@ -287,7 +287,7 @@ function splitCsvClient(line){const out=[];let cur='',q=false;for(let i=0;i<line
 function guessPhoneCol(header){const n=header.map(h=>h.trim().toLowerCase());const c=['phone','phone number','phonenumber','cell','mobile','phone_number'];for(const x of c){const i=n.indexOf(x);if(i>=0)return i;}return n.findIndex(h=>h.includes('phone'));}
 const s=wireDrop('#s-drop','#s-file','#s-fname','#s-run','#s-org');
 s.colwrap='#s-colwrap';s.col='#s-col';
-const p=wireDrop('#p-drop','#p-file','#p-fname','#p-preview','#p-org','#p-dest');
+const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org','#p-dest');
 // Upload requires a successful preview. Any change invalidates it.
 let previewOk=false;
 function invalidatePreview(){

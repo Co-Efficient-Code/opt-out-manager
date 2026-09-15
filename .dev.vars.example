@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local `wrangler dev`. DO NOT COMMIT the real file.
+GOOGLE_CLIENT_ID="xxxx.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET="xxxx"
+SESSION_SECRET="generate-a-long-random-string"
+AWS_ACCESS_KEY_ID="xxxx"
+AWS_SECRET_ACCESS_KEY="xxxx"

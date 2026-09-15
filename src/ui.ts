@@ -56,10 +56,10 @@ table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
 th{color:var(--muted);font-weight:600}
 .btable{table-layout:fixed}
-.btable .c-file{width:56%;word-break:break-all}
-.btable .c-size{width:12%;text-align:right}
-.btable .c-rec{width:14%;text-align:right}
-.btable .c-date{width:18%}
+.btable .c-file{width:52%;word-break:break-all}
+.btable .c-size{width:11%;text-align:right}
+.btable .c-rec{width:13%;text-align:right}
+.btable .c-date{width:24%;white-space:nowrap}
 .btable th.c-size,.btable th.c-rec{text-align:right}
 </style></head>
 <body>

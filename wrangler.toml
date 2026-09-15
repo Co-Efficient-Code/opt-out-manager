@@ -21,8 +21,7 @@ routes = [
 
 [env.staging.vars]
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
-S3_REGION = "us-east-2"
-S3_BUCKET = "coefficient-client-portal-staging"
+S3_REGION = "us-east-1"
 APP_ENV = "staging"
 
 # ============================================
@@ -37,14 +36,16 @@ routes = [
 
 [env.production.vars]
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
-S3_REGION = "us-east-2"
-S3_BUCKET = "coefficient-client-portal"
+S3_REGION = "us-east-1"
 APP_ENV = "production"
 
 # --- Secrets to set per environment (do NOT commit) ---
-# wrangler secret put GOOGLE_CLIENT_ID       --env staging
-# wrangler secret put GOOGLE_CLIENT_SECRET   --env staging
-# wrangler secret put SESSION_SECRET         --env staging
-# wrangler secret put AWS_ACCESS_KEY_ID      --env staging
-# wrangler secret put AWS_SECRET_ACCESS_KEY  --env staging
+# Google auth:
+# wrangler secret put GOOGLE_CLIENT_ID           --env staging
+# wrangler secret put GOOGLE_CLIENT_SECRET       --env staging
+# wrangler secret put SESSION_SECRET             --env staging
+# S3 sync (each value is JSON: {"bucket":"...","accessKeyId":"...","secretAccessKey":"...","region":"us-east-1"}):
+# wrangler secret put S3_SOURCE_P2P              --env staging   # datadash-p2p (PULL)
+# wrangler secret put S3_DEST_BIGDOG             --env staging   # datadash-bigdogstrategies (PUSH)
+# wrangler secret put S3_DEST_CREATIVEDIRECT     --env staging   # datadash-creativedirect (PUSH)
 # (repeat with --env production)

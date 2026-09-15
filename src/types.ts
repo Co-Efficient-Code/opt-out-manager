@@ -1,15 +1,27 @@
+export interface BucketCreds {
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  region: string;
+}
+
 export interface Env {
   // Vars
   GOOGLE_HOSTED_DOMAIN: string;
   S3_REGION: string;
-  S3_BUCKET?: string;
+  APP_ENV?: string;
 
-  // Secrets
+  // Secrets - Google
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   SESSION_SECRET: string;
-  AWS_ACCESS_KEY_ID: string;
-  AWS_SECRET_ACCESS_KEY: string;
+
+  // Secrets - S3 sync targets (JSON-encoded BucketCreds each)
+  // Source we PULL vendor opt-outs from:
+  S3_SOURCE_P2P: string;
+  // Destinations we PUSH opt-outs to:
+  S3_DEST_BIGDOG: string;
+  S3_DEST_CREATIVEDIRECT: string;
 
   // Optional bindings
   SESSIONS?: KVNamespace;

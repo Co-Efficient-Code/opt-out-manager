@@ -10,11 +10,15 @@ export interface Env {
   GOOGLE_HOSTED_DOMAIN: string;
   S3_REGION: string;
   APP_ENV?: string;
+  DRIVE_ROOT_FOLDER?: string;
+  DRIVE_FOLDER_BIGDOG?: string;
+  DRIVE_FOLDER_CREATIVEDIRECT?: string;
 
   // Secrets - Google
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   SESSION_SECRET: string;
+  GOOGLE_SA_KEY: string; // service account JSON (for Drive writes)
 
   // Secrets - S3 sync targets (JSON-encoded BucketCreds each)
   // Source we PULL vendor opt-outs from:

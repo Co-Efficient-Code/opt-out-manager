@@ -23,6 +23,9 @@ routes = [
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
 S3_REGION = "us-east-1"
 APP_ENV = "staging"
+DRIVE_ROOT_FOLDER = "1E8nIqiFBWzlervF0PNtBuZrGWxdqQ4mF"
+DRIVE_FOLDER_BIGDOG = "1SpcxvbNQPOFUFvwJOZoW70F1IzRg07pJ"
+DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
 
 # ============================================
 # PRODUCTION  ->  optouts.coefficient.org
@@ -38,6 +41,9 @@ routes = [
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
 S3_REGION = "us-east-1"
 APP_ENV = "production"
+DRIVE_ROOT_FOLDER = "1E8nIqiFBWzlervF0PNtBuZrGWxdqQ4mF"
+DRIVE_FOLDER_BIGDOG = "1SpcxvbNQPOFUFvwJOZoW70F1IzRg07pJ"
+DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
 
 # --- Secrets to set per environment (do NOT commit) ---
 # Google auth:

@@ -76,6 +76,7 @@ th{color:var(--muted);font-weight:600}
     <div class="tab active" data-tab="scrub">Scrub a list</div>
     <div class="tab" data-tab="push">Upload opt-outs</div>
     <div class="tab" data-tab="browse">Browse buckets</div>
+    <div class="tab" data-tab="uploaded">Uploaded lists</div>
     <div class="tab" data-tab="docs">Documentation</div>
   </div>
 
@@ -83,10 +84,18 @@ th{color:var(--muted);font-weight:600}
   <div id="scrub">
     <div class="card">
       <h2>Scrub a contact list</h2>
-      <p class="sub">Remove existing opt-outs from a list before you send. Reads opt-outs for the selected PAC. Nothing is written to any bucket. See the Documentation tab for file standards.</p>
+      <p class="sub">Remove existing opt-outs from a list before you send. Reads opt-outs for the selected PAC. On download, the cleaned list is also saved to the destination's Google Drive folder. See the Documentation tab for file standards.</p>
       <label>Account (PAC)</label>
       <select id="s-org"><option value="">Loading accounts...</option></select>
-      <label>Contact list (CSV)</label>
+      <label>Destination</label>
+      <select id="s-dest">
+        <option value="">Select a destination...</option>
+        <option value="bigdog">Big Dog Strategies</option>
+        <option value="creativedirect">Creative Direct</option>
+      </select>
+      <label>Project name <span class="muted" style="font-weight:400">(used as the Drive file name, e.g. 261187 NH Senate Big Dog SAG MMS 9.16)</span></label>
+      <input type="text" id="s-project" placeholder="261187 NH Senate Big Dog SAG MMS 9.16" style="width:100%;background:#0a1628;border:1px solid var(--border);color:var(--text);padding:11px 12px;border-radius:8px;font-family:inherit;font-size:14px">
+      <label>Contact list (CSV or Excel)</label>
       <div class="drop" id="s-drop">Drop a CSV or Excel file here or click to choose<input type="file" id="s-file" accept=".csv,.xlsx,.xls" class="hide"></div>
       <div id="s-colwrap" class="hide">
         <label>Phone column <span class="muted" style="font-weight:400">(auto-detected, override if needed)</span></label>
@@ -112,9 +121,10 @@ th{color:var(--muted);font-weight:600}
       </div>
       <div class="note hide" id="r-unparse"></div>
       <div class="row" style="margin-top:18px">
-        <button class="btn" id="s-dl">Download scrubbed CSV</button>
+        <button class="btn" id="s-dl">Download & save to Drive</button>
         <button class="btn ghost" id="s-reset">Scrub another</button>
       </div>
+      <div class="note hide" id="s-drive-msg" style="margin-top:12px"></div>
     </div>
   </div>
 
@@ -131,6 +141,15 @@ th{color:var(--muted);font-weight:600}
       </select>
       <div class="meta" id="b-summary" style="margin-top:14px"></div>
       <div id="b-tree" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- UPLOADED LISTS (Google Drive) -->
+  <div id="uploaded" class="hide">
+    <div class="card">
+      <h2>Uploaded lists</h2>
+      <p class="sub">Scrubbed lists saved to Google Drive, by destination. Read-only.</p>
+      <div id="u-tree"><span class="muted">Select this tab to load.</span></div>
     </div>
   </div>
 
@@ -264,7 +283,9 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   $('#push').classList.toggle('hide',t.dataset.tab!=='push');
   $('#docs').classList.toggle('hide',t.dataset.tab!=='docs');
   $('#browse').classList.toggle('hide',t.dataset.tab!=='browse');
+  $('#uploaded').classList.toggle('hide',t.dataset.tab!=='uploaded');
   if(t.dataset.tab==='browse')loadBrowse();
+  if(t.dataset.tab==='uploaded')loadUploaded();
 });
 // drag/drop wiring
 function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
@@ -384,13 +405,29 @@ $('#s-run').onclick=async()=>{
 };
 $('#s-dl').onclick=async()=>{
   const org=$('#s-org').value;const f=s.file.files[0];
-  const up=await toUploadFile(f);
-  const fd=new FormData();fd.append('org',org);fd.append('file',up);
-  const colv=$('#s-col').value;if(colv!=='')fd.append('phoneCol',colv);
-  fetch('/api/scrub?download=1',{method:'POST',body:fd}).then(r=>r.blob()).then(b=>{
+  const dest=$('#s-dest').value;const project=$('#s-project').value.trim();
+  if(!dest){alert('Pick a destination before downloading (the cleaned list is also saved to that Drive folder).');return;}
+  if(!project){alert('Enter a project name (used as the Drive file name).');return;}
+  const btn=$('#s-dl');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Saving...';
+  const colv=$('#s-col').value;
+  // 1) Download the cleaned CSV to the user
+  try{
+    const up=await toUploadFile(f);
+    const fd=new FormData();fd.append('org',org);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
+    const b=await (await fetch('/api/scrub?download=1',{method:'POST',body:fd})).blob();
     const a=document.createElement('a');a.href=URL.createObjectURL(b);
-    a.download=f.name.replace(/\\.csv$/i,'')+'_scrubbed_'+org+'.csv';a.click();
-  });
+    a.download=(project.endsWith('.csv')?project:project+'.csv');a.click();
+  }catch(e){btn.disabled=false;btn.innerHTML='Download & save to Drive';alert('Download failed: '+e.message);return;}
+  // 2) Save a copy to the destination Drive folder
+  try{
+    const up2=await toUploadFile(f);
+    const fd2=new FormData();fd2.append('org',org);fd2.append('dest',dest);fd2.append('project',project);fd2.append('file',up2);if(colv!=='')fd2.append('phoneCol',colv);
+    const dr=await jsonFetch('/api/scrub/drive',{method:'POST',body:fd2});
+    if(dr.error){$('#s-drive-msg').innerHTML='<span class="muted">Saved locally, but Drive save failed: '+dr.error+'</span>';}
+    else{$('#s-drive-msg').innerHTML='Saved to <b>'+dr.destinationLabel+'</b> Drive folder as <b>'+dr.driveFileName+'</b>.';}
+    $('#s-drive-msg').classList.remove('hide');
+  }catch(e){$('#s-drive-msg').classList.remove('hide');$('#s-drive-msg').innerHTML='<span class="muted">Saved locally, but Drive save failed: '+e.message+'</span>';}
+  btn.disabled=false;btn.innerHTML='Download & save to Drive';
 };
 $('#s-reset').onclick=()=>{$('#s-result').classList.add('hide');s.file.value='';$('#s-fname').textContent='';$('#s-run').disabled=true;$('#s-colwrap').classList.add('hide');};
 
@@ -456,6 +493,30 @@ async function loadBrowse(){
   }
 }
 $('#b-bucket').addEventListener('change',loadBrowse);
+// uploaded lists (Google Drive, read-only)
+async function loadUploaded(){
+  const tree=$('#u-tree');
+  tree.innerHTML='<span class="muted"><span class="spin"></span>Loading from Google Drive...</span>';
+  try{
+    const d=await jsonFetch('/api/drive/list');
+    if(d.error)throw new Error(d.error);
+    const folders=d.folders||{};
+    let html='';
+    for(const name of Object.keys(folders)){
+      const files=folders[name];
+      html+='<div style="margin:14px 0 4px;font-family:Inter;font-weight:600">'+name+' <span class="muted" style="font-weight:400;font-size:12px">('+files.length+')</span></div>';
+      if(files.length===0){html+='<p class="muted" style="font-size:13px">No files.</p>';continue;}
+      html+='<table class="btable"><thead><tr><th class="c-file">File</th><th class="c-size">Size</th><th class="c-date">Modified</th></tr></thead><tbody>';
+      for(const f of files){
+        html+='<tr><td class="c-file">'+f.name+'</td><td class="c-size">'+(f.size!=null?fmtBytes(f.size):'-')+'</td><td class="c-date muted">'+fmtDate(f.modifiedTime)+'</td></tr>';
+      }
+      html+='</tbody></table>';
+    }
+    tree.innerHTML=html||'<p class="muted">No files.</p>';
+  }catch(e){
+    tree.innerHTML='<p class="muted">Failed to load: '+e.message+'</p>';
+  }
+}
 loadAccounts();
 </script>
 </body></html>`;

@@ -6,6 +6,7 @@ import type { SyncRole } from './s3';
 import { scrubContacts, buildOptOutSet, normalizeOptOutCsv } from './scrub';
 import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv } from './parsefile';
+import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
 import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
@@ -157,6 +158,79 @@ api.get('/browse/:bucket', async (c) => {
       fileCount: files.length,
       folderCount: Object.keys(folders).length,
       folders,
+    });
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
+});
+
+// DRIVE: list the uploaded-lists folder (root + destination subfolders). Read-only.
+api.get('/drive/list', async (c) => {
+  try {
+    const root = c.env.DRIVE_ROOT_FOLDER;
+    if (!root) return c.json({ error: 'Drive root folder not configured' }, 500);
+    const [bigdog, cd] = await Promise.all([
+      driveList(c.env, driveFolderFor(c.env, 'bigdog')),
+      driveList(c.env, driveFolderFor(c.env, 'creativedirect')),
+    ]);
+    const clean = (f: { name: string; modifiedTime?: string; size?: string }) => ({
+      name: f.name,
+      modifiedTime: f.modifiedTime || '',
+      size: f.size ? Number(f.size) : null,
+    });
+    return c.json({
+      folders: {
+        'Big Dog': bigdog.filter((f) => f.mimeType !== 'application/vnd.google-apps.folder').map(clean),
+        'Creative Direct': cd.filter((f) => f.mimeType !== 'application/vnd.google-apps.folder').map(clean),
+      },
+    });
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
+});
+
+// SCRUB + SAVE TO DRIVE: scrub a list, return the cleaned CSV as a download,
+// AND save a copy to the destination's Drive subfolder named by project.
+api.post('/scrub/drive', async (c) => {
+  const form = await c.req.formData();
+  const org = String(form.get('org') || '');
+  const dest = String(form.get('dest') || '');
+  const project = String(form.get('project') || '').trim();
+  const file = form.get('file');
+  const phoneColRaw = form.get('phoneCol');
+  const phoneCol =
+    phoneColRaw != null && String(phoneColRaw) !== '' ? parseInt(String(phoneColRaw), 10) : undefined;
+  const destMap: Record<string, string> = { bigdog: 'Big Dog', creativedirect: 'Creative Direct' };
+  if (!org) return c.json({ error: 'missing org' }, 400);
+  if (!destMap[dest]) return c.json({ error: 'missing or invalid destination' }, 400);
+  if (!project) return c.json({ error: 'missing project name' }, 400);
+  if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
+  let csv: string;
+  try {
+    csv = await fileToCsv(file);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+  }
+  try {
+    const result = await scrubContacts(c.env, org, csv, phoneCol);
+    const fileName = project.endsWith('.csv') ? project : `${project}.csv`;
+    const saved = await driveUploadCsv(
+      c.env,
+      driveFolderFor(c.env, dest as DriveDest),
+      fileName,
+      result.cleanedCsv,
+    );
+    return c.json({
+      ok: true,
+      org,
+      destinationLabel: destMap[dest],
+      driveFileName: saved.name,
+      driveFileId: saved.id,
+      inputRows: result.inputRows,
+      scrubbed: result.scrubbed,
+      kept: result.kept,
+      optOutSetSize: result.optOutSetSize,
+      unparseablePhones: result.unparseablePhones,
     });
   } catch (e) {
     return c.json({ error: String(e) }, 502);

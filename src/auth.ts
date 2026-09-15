@@ -70,7 +70,11 @@ export function requireAuth() {
     const user = await decodeSession(token, c.env.SESSION_SECRET);
     if (!user) return c.redirect('/auth/login');
     if (user.hd !== c.env.GOOGLE_HOSTED_DOMAIN) {
-      return c.text('Forbidden: not a coefficient.org account', 403);
+      // Fall back to email domain check (hd can be absent/garbled in older cookies).
+      const emailDomain = (user.email || '').split('@')[1] || '';
+      if (emailDomain !== c.env.GOOGLE_HOSTED_DOMAIN) {
+        return c.json({ error: `Forbidden: ${c.env.GOOGLE_HOSTED_DOMAIN} accounts only (session domain: ${user.hd || 'none'}, email: ${user.email || 'none'})` }, 403);
+      }
     }
     c.set('user', user);
     await next();

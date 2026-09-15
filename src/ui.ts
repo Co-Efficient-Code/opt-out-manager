@@ -180,8 +180,7 @@ th{color:var(--muted);font-weight:600}
       <div class="drop" id="p-drop">Drop a CSV or Excel file here or click to choose<input type="file" id="p-file" accept=".csv,.xlsx,.xls" class="hide"></div>
       <div class="note">TEST MODE: uploads are allowed only for the test account <b>testing-nightly-batch</b>. Real client PACs are blocked until testing is verified. Files are never overwritten.</div>
       <div class="row" style="margin-top:16px">
-        <button class="btn ghost" id="p-preview" disabled>Preview file</button>
-        <button class="btn" id="p-run" disabled title="Preview the file first">Upload opt-outs</button>
+        <button class="btn" id="p-run" disabled title="Preview must succeed first">Upload opt-outs</button>
         <span id="p-fname" class="muted"></span>
       </div>
     </div>
@@ -297,30 +296,32 @@ function invalidatePreview(){
   $('#p-preview-card').classList.add('hide');
   $('#p-result').classList.add('hide');
 }
-p.onReady=(ready)=>{ if(!ready)$('#p-run').disabled=true; invalidatePreview(); if(ready)$('#p-preview').disabled=false; };
-$('#p-dest').addEventListener('change',invalidatePreview);
-$('#p-org').addEventListener('change',invalidatePreview);
-$('#p-file').addEventListener('change',invalidatePreview);
-
-$('#p-preview').onclick=async()=>{
+p.onReady=(ready)=>{ invalidatePreview(); if(ready)autoPreview(); };
+$('#p-dest').addEventListener('change',()=>{invalidatePreview();maybeAutoPreview();});
+$('#p-org').addEventListener('change',()=>{invalidatePreview();maybeAutoPreview();});
+$('#p-file').addEventListener('change',()=>{invalidatePreview();maybeAutoPreview();});
+function maybeAutoPreview(){
+  const org=$('#p-org').value;const dest=$('#p-dest').value;const f=p.file.files[0];
+  if(org&&dest&&f)autoPreview();
+}
+async function autoPreview(){
   const org=$('#p-org').value;const f=p.file.files[0];
   if(!org||!f)return;
-  const btn=$('#p-preview');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Building preview...';
-  const fd=new FormData();fd.append('org',org);fd.append('file',f);
+  const card=$('#p-preview-card');card.classList.remove('hide');
+  $('#p-preview-meta').innerHTML='';
+  $('#p-preview-body').innerHTML='<span class="muted"><span class="spin"></span>Building preview...</span>';
   let d;
-  try{d=await jsonFetch('/api/preview',{method:'POST',body:fd});}
-  catch(e){btn.innerHTML='Preview file';btn.disabled=false;$('#p-preview-card').classList.remove('hide');$('#p-preview-meta').innerHTML='';$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+e.message+'</span>';return;}
-  btn.innerHTML='Preview file';btn.disabled=false;
-  if(d.error){$('#p-preview-card').classList.remove('hide');$('#p-preview-meta').innerHTML='';$('#p-preview-body').innerHTML='<span class="muted">'+d.error+'</span>';return;}
+  try{d=await jsonFetch('/api/preview',{method:'POST',body:(function(){const fd=new FormData();fd.append('org',org);fd.append('file',f);return fd;})()});}
+  catch(e){$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+e.message+'</span>';$('#p-run').disabled=true;return;}
+  if(d.error){$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+d.error+'</span>';$('#p-run').disabled=true;return;}
   $('#p-preview-meta').innerHTML='<span>File: <b>'+d.inputFile+'</b></span><span>PAC: <b>'+d.org+'</b></span><span>Rows in: <b>'+d.inputRows.toLocaleString()+'</b></span><span>Valid opt-outs: <b>'+d.validPhones.toLocaleString()+'</b></span><span>Skipped: <b>'+d.skipped.toLocaleString()+'</b></span>';
   let body='<table class="btable"><thead><tr><th>organization</th><th>phone</th></tr></thead><tbody>';
   d.previewRows.slice(1).forEach(function(row){var c=row.split(',');body+='<tr><td>'+(c[0]||'')+'</td><td>'+(c[1]||'')+'</td></tr>';});
   body+='</tbody></table>';
   if(d.totalOutputRows>d.previewRows.length-1)body+='<p class="muted" style="font-size:12px">Showing first '+(d.previewRows.length-1)+' of '+d.totalOutputRows.toLocaleString()+' rows.</p>';
   $('#p-preview-body').innerHTML=body;
-  $('#p-preview-card').classList.remove('hide');
   previewOk=true;$('#p-run').disabled=false;
-};
+}
 
 // scrub
 $('#s-run').onclick=async()=>{

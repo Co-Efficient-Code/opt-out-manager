@@ -11,8 +11,9 @@
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
+    "aws4fetch": "^1.0.20",
     "hono": "^4.6.3",
-    "aws4fetch": "^1.0.20"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260911.1",

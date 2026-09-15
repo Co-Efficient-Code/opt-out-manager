@@ -5,6 +5,7 @@ import { listAccounts, listAccountsForRole, filesForOrg } from './accounts';
 import type { SyncRole } from './s3';
 import { scrubContacts, buildOptOutSet, normalizeOptOutCsv } from './scrub';
 import { putObjectNoOverwrite } from './s3';
+import { fileToCsv } from './parsefile';
 import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
@@ -106,13 +107,11 @@ api.post('/scrub', async (c) => {
       : undefined;
   if (!org) return c.json({ error: 'missing org' }, 400);
   if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
-  const nameLc = (file.name || '').toLowerCase();
-  if (nameLc.endsWith('.xlsx') || nameLc.endsWith('.xls')) {
-    return c.json({ error: 'Excel files are not supported yet. Please export as CSV and upload that.' }, 400);
-  }
-  const csv = await file.text();
-  if (csv.startsWith('PK') || csv.includes('\u0000')) {
-    return c.json({ error: 'This file appears to be binary (e.g. Excel), not CSV. Export it as CSV and try again.' }, 400);
+  let csv: string;
+  try {
+    csv = await fileToCsv(file);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
   }
   try {
     const result = await scrubContacts(c.env, org, csv, phoneCol);
@@ -170,22 +169,12 @@ api.post('/push', async (c) => {
     }, 403);
   }
 
-  // Reject non-CSV (e.g. .xlsx binary) with a clear message rather than
-  // trying to read binary as text.
-  const nameLc = (file.name || '').toLowerCase();
-  if (nameLc.endsWith('.xlsx') || nameLc.endsWith('.xls')) {
-    return c.json({
-      ok: false, wrote: false,
-      error: 'Excel files are not supported yet. Please export the sheet as CSV and upload that.',
-    }, 400);
-  }
-  const csv = await file.text();
-  // Content sniff: binary/zip files (xlsx) start with "PK" or contain null bytes.
-  if (csv.startsWith('PK') || csv.includes('\u0000')) {
-    return c.json({
-      ok: false, wrote: false,
-      error: 'This file does not look like a CSV (it appears to be binary, e.g. an Excel file). Export it as CSV and try again.',
-    }, 400);
+  // Accept CSV or XLSX/XLS; convert to CSV text.
+  let csv: string;
+  try {
+    csv = await fileToCsv(file);
+  } catch (e) {
+    return c.json({ ok: false, wrote: false, error: e instanceof Error ? e.message : String(e) }, 400);
   }
   const norm = normalizeOptOutCsv(org, csv);
   if (norm.validPhones === 0) {

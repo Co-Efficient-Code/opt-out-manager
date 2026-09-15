@@ -76,7 +76,7 @@ th{color:var(--muted);font-weight:600}
       <label>Account (PAC)</label>
       <select id="s-org"><option value="">Loading accounts...</option></select>
       <label>Contact list (CSV)</label>
-      <div class="drop" id="s-drop">Drop a CSV here or click to choose<input type="file" id="s-file" accept=".csv" class="hide"></div>
+      <div class="drop" id="s-drop">Drop a CSV or Excel file here or click to choose<input type="file" id="s-file" accept=".csv,.xlsx,.xls" class="hide"></div>
       <div id="s-colwrap" class="hide">
         <label>Phone column <span class="muted" style="font-weight:400">(auto-detected, override if needed)</span></label>
         <select id="s-col"><option value="">Auto-detect</option></select>
@@ -154,7 +154,7 @@ th{color:var(--muted);font-weight:600}
       <label>Account (PAC)</label>
       <select id="p-org"><option value="">Select a destination first...</option></select>
       <label>Opt-out list (CSV)</label>
-      <div class="drop" id="p-drop">Drop a CSV here or click to choose (CSV only, not Excel)<input type="file" id="p-file" accept=".csv" class="hide"></div>
+      <div class="drop" id="p-drop">Drop a CSV or Excel file here or click to choose<input type="file" id="p-file" accept=".csv,.xlsx,.xls" class="hide"></div>
       <div class="note">TEST MODE: uploads are allowed only for the test account <b>testing-nightly-batch</b>. Real client PACs are blocked until testing is verified. Files are never overwritten.</div>
       <div class="row" style="margin-top:16px">
         <button class="btn" id="p-run" disabled>Upload opt-outs</button>
@@ -219,6 +219,9 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
   if(destId)$(destId).addEventListener('change',onpick);
   const opts={file,colwrap:null,col:null};
   function populateCols(f){
+    // Column preview only works for text CSV; skip for Excel (binary).
+    const nm=(f.name||'').toLowerCase();
+    if(nm.endsWith('.xlsx')||nm.endsWith('.xls')){$(opts.colwrap).classList.add('hide');return;}
     const reader=new FileReader();
     reader.onload=()=>{
       const firstLine=String(reader.result).split(/\\r?\\n/)[0]||'';

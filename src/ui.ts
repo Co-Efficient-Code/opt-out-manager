@@ -189,9 +189,22 @@ th{color:var(--muted);font-weight:600}
 </div>
 <script>
 const $=s=>document.querySelector(s);
+// Fetch JSON; if the session expired the server redirects to an HTML login
+// page -> detect that and send the user to log in instead of choking on HTML.
+async function jsonFetch(url,opts){
+  const r=await fetch(url,opts);
+  const ct=r.headers.get('content-type')||'';
+  if(!ct.includes('application/json')){
+    // Non-JSON response = session expired / redirected to login HTML.
+    window.location.href='/auth/login';
+    throw new Error('Your session expired. Redirecting to sign in...');
+  }
+  return r.json();
+}
 let accounts=[];
 async function loadAccounts(){
-  const r=await fetch('/api/accounts');const d=await r.json();
+  let d;
+  try{d=await jsonFetch('/api/accounts');}catch(e){return;}
   accounts=d.accounts||[];
   const opts='<option value="">Select a PAC...</option>'+accounts.map(a=>
     '<option value="'+a.org+'">'+a.org+' ('+a.fileCount+' files)</option>').join('');
@@ -305,7 +318,9 @@ $('#p-run').onclick=async()=>{
   const org=$('#p-org').value;const dest=$('#p-dest').value;const f=p.file.files[0];
   const fd=new FormData();fd.append('org',org);fd.append('dest',dest);fd.append('file',f);
   const btn=$('#p-run');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Uploading...';
-  const r=await fetch('/api/push',{method:'POST',body:fd});const d=await r.json();
+  let d;
+  try{d=await jsonFetch('/api/push',{method:'POST',body:fd});}
+  catch(e){btn.innerHTML='Upload opt-outs';btn.disabled=false;$('#p-out').innerHTML='<b>'+e.message+'</b>';$('#p-result').classList.remove('hide');return;}
   btn.innerHTML='Upload opt-outs';btn.disabled=false;
   let html='<b>'+(d.message||d.error||'')+'</b>';
   if(d.wrote){html+='<br>Key: <code>'+d.key+'</code><br>Rows in file: '+d.inputRows+', valid opt-outs written: '+d.validPhones+(d.skipped?(', skipped: '+d.skipped):'');}

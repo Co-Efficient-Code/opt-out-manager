@@ -25,8 +25,23 @@ async function sign(data: string, secret: string): Promise<string> {
   return btoa(String.fromCharCode(...new Uint8Array(sig)));
 }
 
+// UTF-8 safe base64url (btoa throws / corrupts on non-Latin1 chars like accents)
+function b64urlEncode(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecode(s: string): string {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
 export async function encodeSession(user: SessionUser, secret: string): Promise<string> {
-  const payload = btoa(JSON.stringify(user));
+  const payload = b64urlEncode(JSON.stringify(user));
   const sig = await sign(payload, secret);
   return `${payload}.${sig}`;
 }
@@ -39,7 +54,7 @@ export async function decodeSession(
   if (!payload || !sig) return null;
   if ((await sign(payload, secret)) !== sig) return null;
   try {
-    const user = JSON.parse(atob(payload)) as SessionUser;
+    const user = JSON.parse(b64urlDecode(payload)) as SessionUser;
     if (user.exp < Math.floor(Date.now() / 1000)) return null;
     return user;
   } catch {

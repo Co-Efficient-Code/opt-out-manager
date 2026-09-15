@@ -508,7 +508,8 @@ async function loadUploaded(){
       if(files.length===0){html+='<p class="muted" style="font-size:13px">No files.</p>';continue;}
       html+='<table class="btable"><thead><tr><th class="c-file">File</th><th class="c-size">Size</th><th class="c-date">Modified</th></tr></thead><tbody>';
       for(const f of files){
-        html+='<tr><td class="c-file">'+f.name+'</td><td class="c-size">'+(f.size!=null?fmtBytes(f.size):'-')+'</td><td class="c-date muted">'+fmtDate(f.modifiedTime)+'</td></tr>';
+        var nm=f.link?('<a href="'+f.link+'" target="_blank" rel="noopener">'+f.name+'</a>'):f.name;
+        html+='<tr><td class="c-file">'+nm+'</td><td class="c-size">'+(f.size!=null?fmtBytes(f.size):'-')+'</td><td class="c-date muted">'+fmtDate(f.modifiedTime)+'</td></tr>';
       }
       html+='</tbody></table>';
     }

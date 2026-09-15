@@ -173,10 +173,11 @@ api.get('/drive/list', async (c) => {
       driveList(c.env, driveFolderFor(c.env, 'bigdog')),
       driveList(c.env, driveFolderFor(c.env, 'creativedirect')),
     ]);
-    const clean = (f: { name: string; modifiedTime?: string; size?: string }) => ({
+    const clean = (f: { name: string; modifiedTime?: string; size?: string; webViewLink?: string }) => ({
       name: f.name,
       modifiedTime: f.modifiedTime || '',
       size: f.size ? Number(f.size) : null,
+      link: f.webViewLink || '',
     });
     return c.json({
       folders: {

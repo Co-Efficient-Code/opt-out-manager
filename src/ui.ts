@@ -337,7 +337,7 @@ async function autoPreview(){
   }
   catch(e){$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+e.message+'</span>';$('#p-run').disabled=true;return;}
   if(d.error){$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+d.error+'</span>';$('#p-run').disabled=true;return;}
-  $('#p-preview-meta').innerHTML='<span>File: <b>'+d.inputFile+'</b></span><span>PAC: <b>'+d.org+'</b></span><span>Rows in: <b>'+d.inputRows.toLocaleString()+'</b></span><span>Valid opt-outs: <b>'+d.validPhones.toLocaleString()+'</b></span><span>Skipped: <b>'+d.skipped.toLocaleString()+'</b></span>';
+  $('#p-preview-meta').innerHTML='<span>Will be saved as: <b>'+(d.outputFile||'')+'</b></span><span>PAC: <b>'+d.org+'</b></span><span>Rows in: <b>'+d.inputRows.toLocaleString()+'</b></span><span>Valid opt-outs: <b>'+d.validPhones.toLocaleString()+'</b></span><span>Skipped: <b>'+d.skipped.toLocaleString()+'</b></span>';
   let body='<table class="btable"><thead><tr><th>organization</th><th>phone</th></tr></thead><tbody>';
   d.previewRows.slice(1).forEach(function(row){var c=row.split(',');body+='<tr><td>'+(c[0]||'')+'</td><td>'+(c[1]||'')+'</td></tr>';});
   body+='</tbody></table>';

@@ -112,10 +112,14 @@ api.post('/preview', async (c) => {
     const norm = normalizeOptOutCsv(org, csv);
     const lines = norm.csv.split('\n').filter((l) => l.length > 0);
     const previewRows = lines.slice(0, 21); // header + 20
+    // The actual S3 key/filename that will be written (timestamp set at write time).
+    const outputKey = `optouts/${org}/optouts_${org}_${stampNow()}.csv`;
     return c.json({
       ok: true,
       inputFile: file.name,
       org,
+      outputKey,
+      outputFile: outputKey.split('/').pop(),
       inputRows: norm.inputRows,
       validPhones: norm.validPhones,
       skipped: norm.skipped,

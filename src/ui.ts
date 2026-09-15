@@ -56,11 +56,11 @@ table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
 th{color:var(--muted);font-weight:600}
 .btable{table-layout:fixed}
-.btable .c-file{width:48%;word-break:break-all}
-.btable .c-size{width:14%}
-.btable .c-rec{width:18%;text-align:right}
-.btable .c-date{width:20%}
-.btable th.c-rec{text-align:right}
+.btable .c-file{width:56%;word-break:break-all}
+.btable .c-size{width:12%;text-align:right}
+.btable .c-rec{width:14%;text-align:right}
+.btable .c-date{width:18%}
+.btable th.c-size,.btable th.c-rec{text-align:right}
 </style></head>
 <body>
 <div class="top">
@@ -315,7 +315,7 @@ $('#p-run').onclick=async()=>{
 };
 // browse buckets (read-only)
 function fmtBytes(n){if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB';}
-function fmtDate(s){if(!s)return '';return s.replace('T',' ').replace(/\..*/,'').replace('Z',' UTC');}
+function fmtDate(s){if(!s)return '';return s.replace('T',' ').replace(/\\..*/,'').replace('Z',' UTC');}
 async function loadBrowse(){
   const bucket=$('#b-bucket').value;
   const tree=$('#b-tree');const sum=$('#b-summary');

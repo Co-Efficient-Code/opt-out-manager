@@ -94,6 +94,39 @@ api.get('/accounts/:org/optouts/summary', async (c) => {
   }
 });
 
+// PREVIEW: parse+convert+normalize an uploaded file and return the cleaned
+// result (what WOULD be written) without writing anything. Same logic as push.
+api.post('/preview', async (c) => {
+  const form = await c.req.formData();
+  const org = String(form.get('org') || '');
+  const file = form.get('file');
+  if (!org) return c.json({ error: 'missing org' }, 400);
+  if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
+  let csv: string;
+  try {
+    csv = await fileToCsv(file);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
+  }
+  try {
+    const norm = normalizeOptOutCsv(org, csv);
+    const lines = norm.csv.split('\n').filter((l) => l.length > 0);
+    const previewRows = lines.slice(0, 21); // header + 20
+    return c.json({
+      ok: true,
+      inputFile: file.name,
+      org,
+      inputRows: norm.inputRows,
+      validPhones: norm.validPhones,
+      skipped: norm.skipped,
+      previewRows,
+      totalOutputRows: Math.max(0, lines.length - 1),
+    });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
 // BROWSE: read-only listing of a bucket's folders + files. No download.
 api.get('/browse/:bucket', async (c) => {
   const map: Record<string, { role: SyncRole; name: string }> = {

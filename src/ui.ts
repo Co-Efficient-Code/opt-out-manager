@@ -180,9 +180,15 @@ th{color:var(--muted);font-weight:600}
       <div class="drop" id="p-drop">Drop a CSV or Excel file here or click to choose<input type="file" id="p-file" accept=".csv,.xlsx,.xls" class="hide"></div>
       <div class="note">TEST MODE: uploads are allowed only for the test account <b>testing-nightly-batch</b>. Real client PACs are blocked until testing is verified. Files are never overwritten.</div>
       <div class="row" style="margin-top:16px">
-        <button class="btn" id="p-run" disabled>Upload opt-outs</button>
+        <button class="btn ghost" id="p-preview" disabled>Preview file</button>
+        <button class="btn" id="p-run" disabled title="Preview the file first">Upload opt-outs</button>
         <span id="p-fname" class="muted"></span>
       </div>
+    </div>
+    <div class="card hide" id="p-preview-card">
+      <h2>Preview (what will be written)</h2>
+      <div class="meta" id="p-preview-meta"></div>
+      <div id="p-preview-body" style="margin-top:10px"></div>
     </div>
     <div class="card hide" id="p-result"><h2>Result</h2><div id="p-out" class="muted"></div></div>
   </div>
@@ -194,12 +200,14 @@ const $=s=>document.querySelector(s);
 async function jsonFetch(url,opts){
   const r=await fetch(url,opts);
   const ct=r.headers.get('content-type')||'';
-  if(!ct.includes('application/json')){
-    // Non-JSON response = session expired / redirected to login HTML.
+  if(ct.includes('application/json'))return r.json();
+  // Non-JSON: only treat as expired session if we were redirected to login.
+  if(r.redirected && r.url.indexOf('/auth/login')>=0){
     window.location.href='/auth/login';
     throw new Error('Your session expired. Redirecting to sign in...');
   }
-  return r.json();
+  const txt=await r.text();
+  throw new Error('Unexpected response ('+r.status+'): '+txt.slice(0,200));
 }
 let accounts=[];
 async function loadAccounts(){
@@ -252,6 +260,7 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
     const ready=!!f && !!$(orgId).value && destOk;
     $(btnId).disabled=!ready;
     if(f&&opts.colwrap)populateCols(f);
+    if(opts.onReady)opts.onReady(ready);
   }
   $(orgId).addEventListener('change',onpick);
   if(destId)$(destId).addEventListener('change',onpick);
@@ -279,7 +288,39 @@ function splitCsvClient(line){const out=[];let cur='',q=false;for(let i=0;i<line
 function guessPhoneCol(header){const n=header.map(h=>h.trim().toLowerCase());const c=['phone','phone number','phonenumber','cell','mobile','phone_number'];for(const x of c){const i=n.indexOf(x);if(i>=0)return i;}return n.findIndex(h=>h.includes('phone'));}
 const s=wireDrop('#s-drop','#s-file','#s-fname','#s-run','#s-org');
 s.colwrap='#s-colwrap';s.col='#s-col';
-const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org','#p-dest');
+const p=wireDrop('#p-drop','#p-file','#p-fname','#p-preview','#p-org','#p-dest');
+// Upload requires a successful preview. Any change invalidates it.
+let previewOk=false;
+function invalidatePreview(){
+  previewOk=false;
+  $('#p-run').disabled=true;
+  $('#p-preview-card').classList.add('hide');
+  $('#p-result').classList.add('hide');
+}
+p.onReady=(ready)=>{ if(!ready)$('#p-run').disabled=true; invalidatePreview(); if(ready)$('#p-preview').disabled=false; };
+$('#p-dest').addEventListener('change',invalidatePreview);
+$('#p-org').addEventListener('change',invalidatePreview);
+$('#p-file').addEventListener('change',invalidatePreview);
+
+$('#p-preview').onclick=async()=>{
+  const org=$('#p-org').value;const f=p.file.files[0];
+  if(!org||!f)return;
+  const btn=$('#p-preview');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Building preview...';
+  const fd=new FormData();fd.append('org',org);fd.append('file',f);
+  let d;
+  try{d=await jsonFetch('/api/preview',{method:'POST',body:fd});}
+  catch(e){btn.innerHTML='Preview file';btn.disabled=false;$('#p-preview-card').classList.remove('hide');$('#p-preview-meta').innerHTML='';$('#p-preview-body').innerHTML='<span class="muted">Preview failed: '+e.message+'</span>';return;}
+  btn.innerHTML='Preview file';btn.disabled=false;
+  if(d.error){$('#p-preview-card').classList.remove('hide');$('#p-preview-meta').innerHTML='';$('#p-preview-body').innerHTML='<span class="muted">'+d.error+'</span>';return;}
+  $('#p-preview-meta').innerHTML='<span>File: <b>'+d.inputFile+'</b></span><span>PAC: <b>'+d.org+'</b></span><span>Rows in: <b>'+d.inputRows.toLocaleString()+'</b></span><span>Valid opt-outs: <b>'+d.validPhones.toLocaleString()+'</b></span><span>Skipped: <b>'+d.skipped.toLocaleString()+'</b></span>';
+  let body='<table class="btable"><thead><tr><th>organization</th><th>phone</th></tr></thead><tbody>';
+  d.previewRows.slice(1).forEach(function(row){var c=row.split(',');body+='<tr><td>'+(c[0]||'')+'</td><td>'+(c[1]||'')+'</td></tr>';});
+  body+='</tbody></table>';
+  if(d.totalOutputRows>d.previewRows.length-1)body+='<p class="muted" style="font-size:12px">Showing first '+(d.previewRows.length-1)+' of '+d.totalOutputRows.toLocaleString()+' rows.</p>';
+  $('#p-preview-body').innerHTML=body;
+  $('#p-preview-card').classList.remove('hide');
+  previewOk=true;$('#p-run').disabled=false;
+};
 
 // scrub
 $('#s-run').onclick=async()=>{
@@ -313,8 +354,9 @@ $('#s-dl').onclick=()=>{
 };
 $('#s-reset').onclick=()=>{$('#s-result').classList.add('hide');s.file.value='';$('#s-fname').textContent='';$('#s-run').disabled=true;$('#s-colwrap').classList.add('hide');};
 
-// push (dry run)
+// push (requires successful preview first)
 $('#p-run').onclick=async()=>{
+  if(!previewOk){$('#p-out').innerHTML='<b>Please preview the file first.</b>';$('#p-result').classList.remove('hide');return;}
   const org=$('#p-org').value;const dest=$('#p-dest').value;const f=p.file.files[0];
   const fd=new FormData();fd.append('org',org);fd.append('dest',dest);fd.append('file',f);
   const btn=$('#p-run');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Uploading...';

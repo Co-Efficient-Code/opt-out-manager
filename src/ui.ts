@@ -9,6 +9,7 @@ export function renderApp(user: SessionUser, appEnv: string): string {
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Opt-Out Manager</title>
+<link rel="icon" type="image/png" href="https://app.coefficient.org/favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>

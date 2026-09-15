@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { Env, SessionUser } from './types';
 import { authRoutes, requireAuth } from './auth';
-import { listAccounts, listAccountsForRole, filesForOrg } from './accounts';
+import { listAccounts, listAccountsForRole, filesForOrg, listFilesForRole } from './accounts';
 import type { SyncRole } from './s3';
 import { scrubContacts, buildOptOutSet, normalizeOptOutCsv } from './scrub';
 import { putObjectNoOverwrite } from './s3';
@@ -89,6 +89,38 @@ api.get('/accounts/:org/optouts/summary', async (c) => {
   try {
     const set = await buildOptOutSet(c.env, c.req.param('org'));
     return c.json({ org: c.req.param('org'), optOutCount: set.size });
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
+});
+
+// BROWSE: read-only listing of a bucket's folders + files. No download.
+api.get('/browse/:bucket', async (c) => {
+  const map: Record<string, { role: SyncRole; name: string }> = {
+    p2p: { role: 'source', name: 'datadash-p2p' },
+    bigdog: { role: 'bigdog', name: 'datadash-bigdogstrategies' },
+    creativedirect: { role: 'creativedirect', name: 'datadash-creativedirect' },
+  };
+  const info = map[c.req.param('bucket')];
+  if (!info) return c.json({ error: 'invalid bucket' }, 400);
+  try {
+    const files = await listFilesForRole(c.env, info.role);
+    // group by org (folder)
+    const folders: Record<string, { file: string; size: number; lastModified: string }[]> = {};
+    for (const f of files) {
+      const parts = f.key.split('/');
+      const org = parts.length >= 3 && parts[0] === 'optouts' ? parts[1] : '(root)';
+      (folders[org] ??= []).push({ file: f.file, size: f.size, lastModified: f.lastModified });
+    }
+    for (const k of Object.keys(folders)) {
+      folders[k].sort((a, b) => b.lastModified.localeCompare(a.lastModified));
+    }
+    return c.json({
+      bucket: info.name,
+      fileCount: files.length,
+      folderCount: Object.keys(folders).length,
+      folders,
+    });
   } catch (e) {
     return c.json({ error: String(e) }, 502);
   }

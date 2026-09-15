@@ -65,6 +65,7 @@ th{color:var(--muted);font-weight:600}
   <div class="tabs">
     <div class="tab active" data-tab="scrub">Scrub a list</div>
     <div class="tab" data-tab="push">Upload opt-outs</div>
+    <div class="tab" data-tab="browse">Browse buckets</div>
     <div class="tab" data-tab="docs">Documentation</div>
   </div>
 
@@ -104,6 +105,22 @@ th{color:var(--muted);font-weight:600}
         <button class="btn" id="s-dl">Download scrubbed CSV</button>
         <button class="btn ghost" id="s-reset">Scrub another</button>
       </div>
+    </div>
+  </div>
+
+  <!-- BROWSE -->
+  <div id="browse" class="hide">
+    <div class="card">
+      <h2>Browse buckets</h2>
+      <p class="sub">Read-only view of folders and files in each S3 bucket. No uploads or downloads.</p>
+      <label>Bucket</label>
+      <select id="b-bucket">
+        <option value="p2p">datadash-p2p (source)</option>
+        <option value="bigdog">datadash-bigdogstrategies (destination)</option>
+        <option value="creativedirect">datadash-creativedirect (destination)</option>
+      </select>
+      <div class="meta" id="b-summary" style="margin-top:14px"></div>
+      <div id="b-tree" style="margin-top:12px"></div>
     </div>
   </div>
 
@@ -198,6 +215,8 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   $('#scrub').classList.toggle('hide',t.dataset.tab!=='scrub');
   $('#push').classList.toggle('hide',t.dataset.tab!=='push');
   $('#docs').classList.toggle('hide',t.dataset.tab!=='docs');
+  $('#browse').classList.toggle('hide',t.dataset.tab!=='browse');
+  if(t.dataset.tab==='browse')loadBrowse();
 });
 // drag/drop wiring
 function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
@@ -288,6 +307,37 @@ $('#p-run').onclick=async()=>{
   $('#p-out').innerHTML=html;
   $('#p-result').classList.remove('hide');
 };
+// browse buckets (read-only)
+function fmtBytes(n){if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB';}
+function fmtDate(s){if(!s)return '';return s.replace('T',' ').replace(/\..*/,'').replace('Z',' UTC');}
+async function loadBrowse(){
+  const bucket=$('#b-bucket').value;
+  const tree=$('#b-tree');const sum=$('#b-summary');
+  tree.innerHTML='<span class="muted"><span class="spin"></span>Loading...</span>';sum.innerHTML='';
+  try{
+    const r=await fetch('/api/browse/'+bucket);
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    if(d.error)throw new Error(d.error);
+    sum.innerHTML='<span>Bucket: <b>'+d.bucket+'</b></span><span>Folders: <b>'+d.folderCount+'</b></span><span>Files: <b>'+d.fileCount+'</b></span>';
+    const orgs=Object.keys(d.folders).sort();
+    if(orgs.length===0){tree.innerHTML='<p class="muted">Empty bucket.</p>';return;}
+    let html='';
+    for(const org of orgs){
+      const files=d.folders[org];
+      html+='<div style="margin:14px 0 4px;font-family:Inter;font-weight:600">'+org+' <span class="muted" style="font-weight:400;font-size:12px">('+files.length+')</span></div>';
+      html+='<table><thead><tr><th>File</th><th>Size</th><th>Last modified</th></tr></thead><tbody>';
+      for(const f of files){
+        html+='<tr><td>'+f.file+'</td><td>'+fmtBytes(f.size)+'</td><td class="muted">'+fmtDate(f.lastModified)+'</td></tr>';
+      }
+      html+='</tbody></table>';
+    }
+    tree.innerHTML=html;
+  }catch(e){
+    tree.innerHTML='<p class="muted">Failed to load: '+e.message+'</p>';
+  }
+}
+$('#b-bucket').addEventListener('change',loadBrowse);
 loadAccounts();
 </script>
 </body></html>`;

@@ -77,6 +77,33 @@ export async function putObject(
   });
 }
 
+/**
+ * Write an object only if the key does not already exist (never overwrite).
+ * Uses S3 conditional write (If-None-Match: *). Returns the raw Response;
+ * a 412 status means the key already existed and nothing was written.
+ */
+export async function putObjectNoOverwrite(
+  env: Env,
+  role: SyncRole,
+  key: string,
+  body: string | ArrayBuffer,
+  contentType = 'text/csv',
+): Promise<Response> {
+  const c = bucketFor(env, role);
+  return client(c).fetch(objectUrl(c, key), {
+    method: 'PUT',
+    headers: { 'Content-Type': contentType, 'If-None-Match': '*' },
+    body,
+  });
+}
+
+/** Does an object exist? (HEAD, read-only) */
+export async function objectExists(env: Env, role: SyncRole, key: string): Promise<boolean> {
+  const c = bucketFor(env, role);
+  const res = await client(c).fetch(objectUrl(c, key), { method: 'HEAD' });
+  return res.ok;
+}
+
 export async function listObjects(env: Env, role: SyncRole, prefix = ''): Promise<Response> {
   const c = bucketFor(env, role);
   const url = `https://${c.bucket}.s3.${c.region}.amazonaws.com/?list-type=2&prefix=${encodeURIComponent(prefix)}`;

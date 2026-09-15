@@ -67,6 +67,48 @@ export async function buildOptOutSet(env: Env, org: string): Promise<Set<string>
   return set;
 }
 
+export interface NormalizeResult {
+  org: string;
+  inputRows: number;
+  validPhones: number;
+  skipped: number;
+  csv: string; // standard schema: organization,phone
+}
+
+/**
+ * Normalize an uploaded opt-out CSV into the standard schema:
+ *   organization,phone   (phone = raw 10 digits)
+ * Handles standard files and off-format files (finds the phone column,
+ * strips formatting). Dedupes phones.
+ */
+export function normalizeOptOutCsv(org: string, csv: string): NormalizeResult {
+  const lines = csv.split(/\r?\n/);
+  const header = splitCsvLine(lines[0] ?? '');
+  let phoneIdx = findPhoneColumn(header);
+  if (phoneIdx < 0) phoneIdx = header.length - 1; // last col fallback
+  const seen = new Set<string>();
+  let inputRows = 0;
+  let skipped = 0;
+  const out: string[] = ['organization,phone'];
+  for (let i = 1; i < lines.length; i++) {
+    if (!lines[i].trim()) continue;
+    inputRows++;
+    const cols = splitCsvLine(lines[i]);
+    const p = normalizePhone(cols[phoneIdx] ?? '');
+    if (!p) { skipped++; continue; }
+    if (seen.has(p)) continue;
+    seen.add(p);
+    out.push(`${org},${p}`);
+  }
+  return {
+    org,
+    inputRows,
+    validPhones: seen.size,
+    skipped,
+    csv: out.join('\n') + '\n',
+  };
+}
+
 export interface ScrubResult {
   org: string;
   inputRows: number;

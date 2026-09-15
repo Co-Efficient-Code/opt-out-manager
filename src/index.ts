@@ -3,13 +3,28 @@ import type { Env, SessionUser } from './types';
 import { authRoutes, requireAuth } from './auth';
 import { listAccounts, listAccountsForRole, filesForOrg } from './accounts';
 import type { SyncRole } from './s3';
-import { scrubContacts, buildOptOutSet } from './scrub';
+import { scrubContacts, buildOptOutSet, normalizeOptOutCsv } from './scrub';
+import { putObjectNoOverwrite } from './s3';
 import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
 
-// HARD SAFETY SWITCH: writes to client S3 buckets are disabled.
-const ALLOW_BUCKET_WRITES = false;
+// SAFETY: writes to client S3 buckets.
+// ALLOW_BUCKET_WRITES enables the real push path.
+// TEST_PAC_ONLY restricts writes to the test account only, so real client
+// buckets cannot be touched while we validate end-to-end.
+const ALLOW_BUCKET_WRITES = true;
+const TEST_PAC_ONLY = true;
+const TEST_PAC = 'testing-nightly-batch';
+
+function pad(n: number): string { return String(n).padStart(2, '0'); }
+function stampNow(): string {
+  const d = new Date();
+  return (
+    `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}` +
+    `_${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`
+  );
+}
 
 const app = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -91,7 +106,14 @@ api.post('/scrub', async (c) => {
       : undefined;
   if (!org) return c.json({ error: 'missing org' }, 400);
   if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
+  const nameLc = (file.name || '').toLowerCase();
+  if (nameLc.endsWith('.xlsx') || nameLc.endsWith('.xls')) {
+    return c.json({ error: 'Excel files are not supported yet. Please export as CSV and upload that.' }, 400);
+  }
   const csv = await file.text();
+  if (csv.startsWith('PK') || csv.includes('\u0000')) {
+    return c.json({ error: 'This file appears to be binary (e.g. Excel), not CSV. Export it as CSV and try again.' }, 400);
+  }
   try {
     const result = await scrubContacts(c.env, org, csv, phoneCol);
     const download = c.req.query('download') === '1';
@@ -127,24 +149,70 @@ api.post('/push', async (c) => {
     creativedirect: { bucket: 'datadash-creativedirect', label: 'Creative Direct' },
   };
   const destInfo = destMap[dest];
+  const role = dest as SyncRole;
   if (!org) return c.json({ error: 'missing org' }, 400);
   if (!destInfo) return c.json({ error: 'missing or invalid destination' }, 400);
+  if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
+
   if (!ALLOW_BUCKET_WRITES) {
     return c.json({
-      ok: false,
-      dryRun: true,
-      wrote: false,
-      message: 'Bucket writes are DISABLED. This is a dry run. No data was pushed to any S3 bucket.',
-      wouldPush: {
-        org,
-        file: fileName,
-        destination: destInfo.bucket,
-        destinationLabel: destInfo.label,
-      },
+      ok: false, dryRun: true, wrote: false,
+      message: 'Bucket writes are DISABLED. This is a dry run.',
+      wouldPush: { org, file: fileName, destination: destInfo.bucket, destinationLabel: destInfo.label },
     }, 200);
   }
-  // (unreachable while writes disabled)
-  return c.json({ error: 'not implemented' }, 501);
+
+  // Test-only lock: refuse writes to any real PAC while validating.
+  if (TEST_PAC_ONLY && org !== TEST_PAC) {
+    return c.json({
+      ok: false, wrote: false,
+      message: `TEST MODE: writes are restricted to the test account "${TEST_PAC}" only. "${org}" is a real client PAC and was NOT written.`,
+    }, 403);
+  }
+
+  // Reject non-CSV (e.g. .xlsx binary) with a clear message rather than
+  // trying to read binary as text.
+  const nameLc = (file.name || '').toLowerCase();
+  if (nameLc.endsWith('.xlsx') || nameLc.endsWith('.xls')) {
+    return c.json({
+      ok: false, wrote: false,
+      error: 'Excel files are not supported yet. Please export the sheet as CSV and upload that.',
+    }, 400);
+  }
+  const csv = await file.text();
+  // Content sniff: binary/zip files (xlsx) start with "PK" or contain null bytes.
+  if (csv.startsWith('PK') || csv.includes('\u0000')) {
+    return c.json({
+      ok: false, wrote: false,
+      error: 'This file does not look like a CSV (it appears to be binary, e.g. an Excel file). Export it as CSV and try again.',
+    }, 400);
+  }
+  const norm = normalizeOptOutCsv(org, csv);
+  if (norm.validPhones === 0) {
+    return c.json({
+      ok: false, wrote: false,
+      error: `No valid phone numbers found in the file (checked ${norm.inputRows} rows). Nothing was written. Make sure there is a phone column.`,
+    }, 400);
+  }
+  const key = `optouts/${org}/optouts_${org}_${stampNow()}.csv`;
+  try {
+    const res = await putObjectNoOverwrite(c.env, role, key, norm.csv, 'text/csv');
+    if (res.status === 412) {
+      return c.json({ ok: false, wrote: false, message: 'A file with this key already exists. Not overwritten.', key }, 409);
+    }
+    if (!res.ok) {
+      const body = await res.text();
+      return c.json({ ok: false, wrote: false, error: `S3 write failed: ${res.status}`, detail: body.slice(0, 500) }, 502);
+    }
+    return c.json({
+      ok: true, wrote: true,
+      message: `Wrote ${norm.validPhones} opt-outs for ${org} to ${destInfo.label}.`,
+      destination: destInfo.bucket, destinationLabel: destInfo.label,
+      key, inputRows: norm.inputRows, validPhones: norm.validPhones, skipped: norm.skipped,
+    }, 200);
+  } catch (e) {
+    return c.json({ ok: false, wrote: false, error: String(e) }, 502);
+  }
 });
 
 app.route('/api', api);

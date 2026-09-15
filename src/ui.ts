@@ -154,14 +154,14 @@ th{color:var(--muted);font-weight:600}
       <label>Account (PAC)</label>
       <select id="p-org"><option value="">Select a destination first...</option></select>
       <label>Opt-out list (CSV)</label>
-      <div class="drop" id="p-drop">Drop a CSV here or click to choose<input type="file" id="p-file" accept=".csv" class="hide"></div>
-      <div class="note">Writes to client S3 buckets are turned off. This will validate and preview only, without pushing anything.</div>
+      <div class="drop" id="p-drop">Drop a CSV here or click to choose (CSV only, not Excel)<input type="file" id="p-file" accept=".csv" class="hide"></div>
+      <div class="note">TEST MODE: uploads are allowed only for the test account <b>testing-nightly-batch</b>. Real client PACs are blocked until testing is verified. Files are never overwritten.</div>
       <div class="row" style="margin-top:16px">
-        <button class="btn" id="p-run" disabled>Preview push (dry run)</button>
+        <button class="btn" id="p-run" disabled>Upload opt-outs</button>
         <span id="p-fname" class="muted"></span>
       </div>
     </div>
-    <div class="card hide" id="p-result"><h2>Dry run</h2><div id="p-out" class="muted"></div></div>
+    <div class="card hide" id="p-result"><h2>Result</h2><div id="p-out" class="muted"></div></div>
   </div>
 </div>
 <script>
@@ -276,8 +276,13 @@ $('#s-reset').onclick=()=>{$('#s-result').classList.add('hide');s.file.value='';
 $('#p-run').onclick=async()=>{
   const org=$('#p-org').value;const dest=$('#p-dest').value;const f=p.file.files[0];
   const fd=new FormData();fd.append('org',org);fd.append('dest',dest);fd.append('file',f);
+  const btn=$('#p-run');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Uploading...';
   const r=await fetch('/api/push',{method:'POST',body:fd});const d=await r.json();
-  $('#p-out').innerHTML='<b>'+(d.message||'')+'</b><br>Would push <b>'+(d.wouldPush?.file||'')+'</b> for PAC <b>'+(d.wouldPush?.org||'')+'</b> to destination: <b>'+(d.wouldPush?.destinationLabel||d.wouldPush?.destination||'')+'</b>';
+  btn.innerHTML='Upload opt-outs';btn.disabled=false;
+  let html='<b>'+(d.message||d.error||'')+'</b>';
+  if(d.wrote){html+='<br>Key: <code>'+d.key+'</code><br>Rows in file: '+d.inputRows+', valid opt-outs written: '+d.validPhones+(d.skipped?(', skipped: '+d.skipped):'');}
+  else if(d.error){html+='<br><span class="muted">'+(d.detail||d.error)+'</span>';}
+  $('#p-out').innerHTML=html;
   $('#p-result').classList.remove('hide');
 };
 loadAccounts();

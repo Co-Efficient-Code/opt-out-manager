@@ -75,8 +75,8 @@ th{color:var(--muted);font-weight:600}
   <div class="tabs">
     <div class="tab active" data-tab="scrub">Scrub a list</div>
     <div class="tab" data-tab="push">Upload opt-outs</div>
-    <div class="tab" data-tab="browse">Browse buckets</div>
     <div class="tab" data-tab="uploaded">Uploaded lists</div>
+    <div class="tab" data-tab="browse">Browse buckets</div>
     <div class="tab" data-tab="docs">Documentation</div>
   </div>
 

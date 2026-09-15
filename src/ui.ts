@@ -65,13 +65,14 @@ th{color:var(--muted);font-weight:600}
   <div class="tabs">
     <div class="tab active" data-tab="scrub">Scrub a list</div>
     <div class="tab" data-tab="push">Upload opt-outs</div>
+    <div class="tab" data-tab="docs">Documentation</div>
   </div>
 
   <!-- SCRUB -->
   <div id="scrub">
     <div class="card">
       <h2>Scrub a contact list</h2>
-      <p class="sub">Remove existing opt-outs from a list before you send. Reads opt-outs for the selected PAC. Nothing is written to any bucket.</p>
+      <p class="sub">Remove existing opt-outs from a list before you send. Reads opt-outs for the selected PAC. Nothing is written to any bucket. See the Documentation tab for file standards.</p>
       <label>Account (PAC)</label>
       <select id="s-org"><option value="">Loading accounts...</option></select>
       <label>Contact list (CSV)</label>
@@ -106,11 +107,44 @@ th{color:var(--muted);font-weight:600}
     </div>
   </div>
 
+  <!-- DOCS -->
+  <div id="docs" class="hide">
+    <div class="card">
+      <h2>File standards</h2>
+      <p class="sub">These conventions apply to opt-out files in all buckets (p2p, Big Dog, Creative Direct). Both flows follow the same standard.</p>
+      <h3 style="font-size:15px;margin:18px 0 6px">Filename convention</h3>
+      <div class="stat" style="font-family:monospace;font-size:13px">optouts/&lt;org&gt;/optouts_&lt;org&gt;_&lt;YYYYMMDD&gt;_&lt;HHMMSS&gt;.csv</div>
+      <div class="meta" style="margin-top:10px">
+        <span>Prefix: <b>optouts/</b></span>
+        <span>One folder per org (PAC slug)</span>
+        <span>Timestamp to the second</span>
+      </div>
+      <p class="muted" style="font-size:13px;margin-top:8px">Example: <code>optouts/sag-pac/optouts_sag-pac_20260915_125300.csv</code></p>
+
+      <h3 style="font-size:15px;margin:22px 0 6px">Schema</h3>
+      <div class="stat" style="font-family:monospace;font-size:13px">organization,phone<br>sag-pac,2012109783</div>
+      <div class="meta" style="margin-top:10px">
+        <span>Header exactly: <b>organization,phone</b></span>
+        <span><b>organization</b> = org slug (lowercase, hyphenated)</span>
+        <span><b>phone</b> = raw 10 digits, no formatting</span>
+      </div>
+
+      <h3 style="font-size:15px;margin:22px 0 6px">Overwrite policy</h3>
+      <ul style="color:var(--muted);font-size:14px;line-height:1.6;margin:6px 0 0;padding-left:20px">
+        <li><b style="color:var(--text)">Files are never overwritten.</b> Every push gets a fresh timestamp, so keys are always unique.</li>
+        <li>Uploading the same file twice creates two timestamped files. Nothing is clobbered.</li>
+        <li>A write guard (HEAD / If-None-Match) will block any accidental overwrite at the API level once writes are enabled.</li>
+      </ul>
+
+      <div class="note" style="margin-top:20px">Uploads are local-preview only right now. Nothing is written to any S3 bucket. Writes remain disabled to protect client data.</div>
+    </div>
+  </div>
+
   <!-- PUSH -->
   <div id="push" class="hide">
     <div class="card">
       <h2>Upload opt-outs</h2>
-      <p class="sub">After a send, upload the new opt-out list for a PAC. Writes are currently DISABLED (dry run only) to protect client data.</p>
+      <p class="sub">After a send, upload the new opt-out list for a PAC. Files follow the standard in the Documentation tab: named optouts_&lt;org&gt;_&lt;timestamp&gt;.csv, schema organization,phone, and never overwritten. Writes are currently DISABLED (dry run only) to protect client data.</p>
       <label>Account (PAC)</label>
       <select id="p-org"><option value="">Loading accounts...</option></select>
       <label>Opt-out list (CSV)</label>
@@ -140,6 +174,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   t.classList.add('active');
   $('#scrub').classList.toggle('hide',t.dataset.tab!=='scrub');
   $('#push').classList.toggle('hide',t.dataset.tab!=='push');
+  $('#docs').classList.toggle('hide',t.dataset.tab!=='docs');
 });
 // drag/drop wiring
 function wireDrop(dropId,fileId,fnameId,btnId,orgId){

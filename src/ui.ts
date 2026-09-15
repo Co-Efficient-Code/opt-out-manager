@@ -315,7 +315,7 @@ $('#p-run').onclick=async()=>{
 };
 // browse buckets (read-only)
 function fmtBytes(n){if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB';}
-function fmtDate(s){if(!s)return '';return s.replace('T',' ').replace(/\\..*/,'').replace('Z',' UTC');}
+function fmtDate(s){if(!s)return '';var d=new Date(s);if(isNaN(d))return s;return d.toLocaleString('en-US',{timeZone:'America/Chicago',year:'numeric',month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit',hour12:true})+' CT';}
 async function loadBrowse(){
   const bucket=$('#b-bucket').value;
   const tree=$('#b-tree');const sum=$('#b-summary');

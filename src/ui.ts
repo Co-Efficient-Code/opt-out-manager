@@ -145,6 +145,12 @@ th{color:var(--muted);font-weight:600}
     <div class="card">
       <h2>Upload opt-outs</h2>
       <p class="sub">After a send, upload the new opt-out list for a PAC. Files follow the standard in the Documentation tab: named optouts_&lt;org&gt;_&lt;timestamp&gt;.csv, schema organization,phone, and never overwritten. Writes are currently DISABLED (dry run only) to protect client data.</p>
+      <label>Destination</label>
+      <select id="p-dest">
+        <option value="">Select a destination...</option>
+        <option value="bigdog">Big Dog Strategies</option>
+        <option value="creativedirect">Creative Direct</option>
+      </select>
       <label>Account (PAC)</label>
       <select id="p-org"><option value="">Loading accounts...</option></select>
       <label>Opt-out list (CSV)</label>
@@ -177,7 +183,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   $('#docs').classList.toggle('hide',t.dataset.tab!=='docs');
 });
 // drag/drop wiring
-function wireDrop(dropId,fileId,fnameId,btnId,orgId){
+function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
   const drop=$(dropId),file=$(fileId);
   drop.onclick=()=>file.click();
   ['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('hot')}));
@@ -187,11 +193,13 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId){
   function onpick(){
     const f=file.files[0];
     $(fnameId).textContent=f?f.name:'';
-    const ready=!!f && !!$(orgId).value;
+    const destOk=!destId || !!$(destId).value;
+    const ready=!!f && !!$(orgId).value && destOk;
     $(btnId).disabled=!ready;
     if(f&&opts.colwrap)populateCols(f);
   }
   $(orgId).onchange=onpick;
+  if(destId)$(destId).onchange=onpick;
   const opts={file,colwrap:null,col:null};
   function populateCols(f){
     const reader=new FileReader();
@@ -213,7 +221,7 @@ function splitCsvClient(line){const out=[];let cur='',q=false;for(let i=0;i<line
 function guessPhoneCol(header){const n=header.map(h=>h.trim().toLowerCase());const c=['phone','phone number','phonenumber','cell','mobile','phone_number'];for(const x of c){const i=n.indexOf(x);if(i>=0)return i;}return n.findIndex(h=>h.includes('phone'));}
 const s=wireDrop('#s-drop','#s-file','#s-fname','#s-run','#s-org');
 s.colwrap='#s-colwrap';s.col='#s-col';
-const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org');
+const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org','#p-dest');
 
 // scrub
 $('#s-run').onclick=async()=>{
@@ -249,10 +257,10 @@ $('#s-reset').onclick=()=>{$('#s-result').classList.add('hide');s.file.value='';
 
 // push (dry run)
 $('#p-run').onclick=async()=>{
-  const org=$('#p-org').value;const f=p.file.files[0];
-  const fd=new FormData();fd.append('org',org);fd.append('file',f);
+  const org=$('#p-org').value;const dest=$('#p-dest').value;const f=p.file.files[0];
+  const fd=new FormData();fd.append('org',org);fd.append('dest',dest);fd.append('file',f);
   const r=await fetch('/api/push',{method:'POST',body:fd});const d=await r.json();
-  $('#p-out').innerHTML='<b>'+(d.message||'')+'</b><br>Would push <b>'+(d.wouldPush?.file||'')+'</b> for <b>'+(d.wouldPush?.org||'')+'</b> to: '+(d.wouldPush?.destinations||[]).join(', ');
+  $('#p-out').innerHTML='<b>'+(d.message||'')+'</b><br>Would push <b>'+(d.wouldPush?.file||'')+'</b> for PAC <b>'+(d.wouldPush?.org||'')+'</b> to destination: <b>'+(d.wouldPush?.destinationLabel||d.wouldPush?.destination||'')+'</b>';
   $('#p-result').classList.remove('hide');
 };
 loadAccounts();

@@ -94,8 +94,16 @@ api.post('/scrub', async (c) => {
 api.post('/push', async (c) => {
   const form = await c.req.formData();
   const org = String(form.get('org') || '');
+  const dest = String(form.get('dest') || '');
   const file = form.get('file');
   const fileName = file instanceof File ? file.name : null;
+  const destMap: Record<string, { bucket: string; label: string }> = {
+    bigdog: { bucket: 'datadash-bigdogstrategies', label: 'Big Dog Strategies' },
+    creativedirect: { bucket: 'datadash-creativedirect', label: 'Creative Direct' },
+  };
+  const destInfo = destMap[dest];
+  if (!org) return c.json({ error: 'missing org' }, 400);
+  if (!destInfo) return c.json({ error: 'missing or invalid destination' }, 400);
   if (!ALLOW_BUCKET_WRITES) {
     return c.json({
       ok: false,
@@ -105,7 +113,8 @@ api.post('/push', async (c) => {
       wouldPush: {
         org,
         file: fileName,
-        destinations: ['datadash-bigdogstrategies', 'datadash-creativedirect'],
+        destination: destInfo.bucket,
+        destinationLabel: destInfo.label,
       },
     }, 200);
   }

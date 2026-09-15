@@ -4,7 +4,7 @@ import { authRoutes, requireAuth } from './auth';
 import { listAccounts, listAccountsForRole, filesForOrg, listFilesForRole } from './accounts';
 import type { SyncRole } from './s3';
 import { scrubContacts, buildOptOutSet, normalizeOptOutCsv } from './scrub';
-import { putObjectNoOverwrite } from './s3';
+import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv } from './parsefile';
 import { renderApp } from './ui';
 
@@ -121,6 +121,27 @@ api.get('/browse/:bucket', async (c) => {
       folderCount: Object.keys(folders).length,
       folders,
     });
+  } catch (e) {
+    return c.json({ error: String(e) }, 502);
+  }
+});
+
+// Exact record count for one file (read-only). Guards very large files.
+const COUNT_MAX_BYTES = 8 * 1024 * 1024; // 8 MB
+api.get('/count/:bucket/:org/:file', async (c) => {
+  const map: Record<string, SyncRole> = { p2p: 'source', bigdog: 'bigdog', creativedirect: 'creativedirect' };
+  const role = map[c.req.param('bucket')];
+  if (!role) return c.json({ error: 'invalid bucket' }, 400);
+  const key = `optouts/${c.req.param('org')}/${c.req.param('file')}`;
+  try {
+    const res = await getObject(c.env, role, key);
+    if (!res.ok) return c.json({ error: 'not found', status: res.status }, 404);
+    const len = Number(res.headers.get('content-length') || '0');
+    if (len > COUNT_MAX_BYTES) return c.json({ tooLarge: true });
+    const text = await res.text();
+    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    const records = Math.max(0, lines.length - 1); // minus header
+    return c.json({ records });
   } catch (e) {
     return c.json({ error: String(e) }, 502);
   }

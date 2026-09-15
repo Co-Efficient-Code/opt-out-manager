@@ -55,6 +55,12 @@ select,input[type=file]{width:100%;background:#0a1628;border:1px solid var(--bor
 table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
 th{color:var(--muted);font-weight:600}
+.btable{table-layout:fixed}
+.btable .c-file{width:48%;word-break:break-all}
+.btable .c-size{width:14%}
+.btable .c-rec{width:18%;text-align:right}
+.btable .c-date{width:20%}
+.btable th.c-rec{text-align:right}
 </style></head>
 <body>
 <div class="top">
@@ -326,13 +332,25 @@ async function loadBrowse(){
     for(const org of orgs){
       const files=d.folders[org];
       html+='<div style="margin:14px 0 4px;font-family:Inter;font-weight:600">'+org+' <span class="muted" style="font-weight:400;font-size:12px">('+files.length+')</span></div>';
-      html+='<table><thead><tr><th>File</th><th>Size</th><th>Last modified</th></tr></thead><tbody>';
+      html+='<table class="btable"><thead><tr><th class="c-file">File</th><th class="c-size">Size</th><th class="c-rec">Records</th><th class="c-date">Uploaded</th></tr></thead><tbody>';
       for(const f of files){
-        html+='<tr><td>'+f.file+'</td><td>'+fmtBytes(f.size)+'</td><td class="muted">'+fmtDate(f.lastModified)+'</td></tr>';
+        var cid='rc_'+bucket+'_'+org+'_'+f.file.replace(/[^a-z0-9]/gi,'_');
+        html+='<tr><td class="c-file">'+f.file+'</td><td class="c-size">'+fmtBytes(f.size)+'</td><td class="c-rec muted" id="'+cid+'" data-org="'+org+'" data-file="'+encodeURIComponent(f.file)+'">...</td><td class="c-date muted">'+fmtDate(f.lastModified)+'</td></tr>';
       }
       html+='</tbody></table>';
     }
     tree.innerHTML=html;
+    // lazily fetch exact record counts per file
+    tree.querySelectorAll('.c-rec[id]').forEach(async cell=>{
+      const org=cell.dataset.org;const file=cell.dataset.file;
+      try{
+        const rr=await fetch('/api/count/'+bucket+'/'+encodeURIComponent(org)+'/'+file);
+        const dd=await rr.json();
+        if(dd.tooLarge)cell.textContent='large file';
+        else if(typeof dd.records==='number'){cell.textContent=dd.records.toLocaleString();cell.classList.remove('muted');}
+        else cell.textContent='-';
+      }catch(e){cell.textContent='-';}
+    });
   }catch(e){
     tree.innerHTML='<p class="muted">Failed to load: '+e.message+'</p>';
   }

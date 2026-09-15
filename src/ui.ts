@@ -185,7 +185,7 @@ async function loadDestAccounts(dest){
     const d=await r.json();
     const accts=d.accounts||[];
     sel.innerHTML='<option value="">Select a PAC...</option>'+accts.map(a=>
-      '<option value="'+a.org+'">'+a.org+' ('+a.fileCount+' files)</option>').join('');
+      '<option value="'+a.org+'">'+a.org+'</option>').join('');
   }catch(e){
     sel.innerHTML='<option value="">Failed to load ('+e.message+')</option>';
   }

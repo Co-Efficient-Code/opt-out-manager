@@ -35,13 +35,25 @@ api.get('/accounts', async (c) => {
   }
 });
 
-// List PAC accounts for a specific destination bucket (read-only).
+// PAC list for the upload flow: all PACs from p2p (source) UNION any that
+// already exist in the chosen destination bucket (e.g. testing accounts).
+// Read-only.
 api.get('/accounts/dest/:dest', async (c) => {
   const map: Record<string, SyncRole> = { bigdog: 'bigdog', creativedirect: 'creativedirect' };
   const role = map[c.req.param('dest')];
   if (!role) return c.json({ error: 'invalid destination' }, 400);
   try {
-    return c.json({ dest: c.req.param('dest'), accounts: await listAccountsForRole(c.env, role) });
+    // Union PACs across source (p2p) and BOTH destination buckets so testing/
+    // one-off accounts show up regardless of which destination is selected.
+    const [source, bigdog, cd] = await Promise.all([
+      listAccounts(c.env),
+      listAccountsForRole(c.env, 'bigdog'),
+      listAccountsForRole(c.env, 'creativedirect'),
+    ]);
+    const orgs = new Set<string>();
+    for (const a of [...source, ...bigdog, ...cd]) orgs.add(a.org);
+    const accounts = [...orgs].sort((x, y) => x.localeCompare(y)).map((org) => ({ org }));
+    return c.json({ dest: c.req.param('dest'), accounts });
   } catch (e) {
     return c.json({ error: String(e) }, 502);
   }

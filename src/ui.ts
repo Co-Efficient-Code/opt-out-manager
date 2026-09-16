@@ -663,7 +663,7 @@ async function loadRunlogs(){
   try{var m=await jsonFetch('/api/mapping');rlPacs=m.pacSlugs||[];rlDests=m.destinations||[];}catch(e){}
   const newTotal=g.groups.reduce((s,x)=>s+x.newCount,0);
   const quarTotal=g.quarantined.reduce((s,x)=>s+x.count,0);
-  $('#rl-meta').innerHTML='<span>Client: <b>'+g.client+'</b></span><span>Ran: <b>'+fmtDate(g.ranAt)+'</b></span><span>Client total opt-outs: <b>'+g.totalCount.toLocaleString()+'</b></span><span>Pulled this run: <b>'+g.inputOptOuts.toLocaleString()+'</b></span>';
+  $('#rl-meta').innerHTML='<span>Client: <b>'+g.client+'</b></span><span>Ran: <b>'+fmtDate(g.ranAt)+'</b></span><span>Total opt-outs: <b>'+g.totalCount.toLocaleString()+'</b></span>';
   $('#rl-stats').innerHTML=
     '<div class="stat"><div class="n good">'+newTotal.toLocaleString()+'</div><div class="l">New opt-outs</div></div>'+
     '<div class="stat"><div class="n">'+g.groups.length+'</div><div class="l">PAC+Destination groups</div></div>'+

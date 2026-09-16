@@ -245,7 +245,7 @@ export function buildRunEmail(
   t.push(`Ran: ${ranLocal} CT`);
   t.push('');
   t.push(`New opt-outs (would be uploaded): ${newTotal.toLocaleString()}`);
-  t.push(`Pulled this run: ${log.inputOptOuts.toLocaleString()} of ${log.totalCount.toLocaleString()} total`);
+  t.push(`${log.totalCount.toLocaleString()} total opt-outs`);
   t.push('');
   if (log.groups.length) {
     t.push('By PAC / Destination:');
@@ -282,7 +282,7 @@ export function buildRunEmail(
   h.push(`<div style="font-family:Arial,Helvetica,sans-serif;color:#0a1628;max-width:640px">`);
   h.push(`<h2 style="margin:0 0 4px">Opt-Out Sync run: ${esc(log.client)}</h2>`);
   h.push(`<p style="color:#64748b;margin:0 0 14px;font-size:13px">${esc(ranLocal)} CT</p>`);
-  h.push(`<div style="font-size:15px;margin:0 0 16px"><b style="color:#16a34a">${newTotal.toLocaleString()}</b> new opt-outs &nbsp;|&nbsp; ${log.inputOptOuts.toLocaleString()} pulled of ${log.totalCount.toLocaleString()} total</div>`);
+  h.push(`<div style="font-size:15px;margin:0 0 16px"><b style="color:#16a34a">${newTotal.toLocaleString()}</b> new opt-outs &nbsp;|&nbsp; ${log.totalCount.toLocaleString()} total opt-outs</div>`);
   if (log.groups.length) {
     h.push(`<table style="border-collapse:collapse;width:100%;font-size:13px;margin:0 0 18px"><thead><tr>`);
     h.push(`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">PAC</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Destination</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">New</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">Already reported</th></tr></thead><tbody>`);

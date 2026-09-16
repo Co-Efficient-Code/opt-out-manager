@@ -7,11 +7,10 @@ import { scrubContacts, buildOptOutSet, normalizeOptOutCsv } from './scrub';
 import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv } from './parsefile';
 import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
-import { pullOptOuts, MAGA_CLIENT } from './rgop';
-import { buildRunLog, buildRunEmail } from './runlogs';
+
 import { loadOverrides, setOverride, PAC_SLUGS, DESTINATIONS } from './mapping';
-import { sendEmail } from './email';
-import { appendRunRecord, recordFromRun, loadRunHistory } from './runhistory';
+import { loadRunHistory } from './runhistory';
+import { runOptOutSync } from './runner';
 import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
@@ -384,63 +383,20 @@ api.post('/push', async (c) => {
 //   {"type":"error", error} on failure
 api.get('/runlogs/dry-run', async (c) => {
   const encoder = new TextEncoder();
+  const user = c.get('user');
+  const appUrl = c.env.APP_URL || new URL(c.req.url).origin;
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
       try {
-        send({ type: 'progress', phase: 'pull', message: 'Connecting to ReadyGOP...' });
-        const { rows, totalCount } = await pullOptOuts(c.env, MAGA_CLIENT.id, {
-          onProgress: (p) =>
-            send({
-              type: 'progress',
-              phase: 'pull',
-              page: p.page,
-              pulled: p.pulled,
-              totalCount: p.totalCount,
-              message: `Pulling from ReadyGOP: ${p.pulled.toLocaleString()}${p.totalCount ? ' of ' + p.totalCount.toLocaleString() : ''} opt-outs (page ${p.page})`,
-            }),
+        const { log, email } = await runOptOutSync(c.env, {
+          appUrl,
+          triggeredBy: user?.email || 'unknown',
+          triggeredByName: user?.name,
+          source: 'readygop-live',
+          onProgress: (phase, message, extra) => send({ type: 'progress', phase, message, ...(extra || {}) }),
         });
-        const log = await buildRunLog(
-          c.env,
-          rows,
-          { client: MAGA_CLIENT.name, source: 'readygop-live', totalCount },
-          (msg) => send({ type: 'progress', phase: 'readback', message: msg }),
-        );
-        // Send the run-summary email (chopper -> jacob). Still a DRY RUN: no S3
-        // writes. An email failure must never fail the run, so it is caught and
-        // reported as a progress line rather than thrown.
-        let emailStatus: { sent: boolean; error?: string } = { sent: false };
-        try {
-          send({ type: 'progress', phase: 'email', message: 'Sending summary email...' });
-          const appUrl = new URL(c.req.url).origin;
-          const mail = buildRunEmail(log, appUrl);
-          await sendEmail(c.env, {
-            fromEmail: 'chopper@coefficient.org',
-            fromName: 'Chopper (Opt-Out Sync)',
-            to: ['jacob@coefficient.org'],
-            subject: mail.subject,
-            html: mail.html,
-            text: mail.text,
-          });
-          emailStatus.sent = true;
-          send({ type: 'progress', phase: 'email', message: 'Summary email sent to jacob@coefficient.org' });
-        } catch (e) {
-          emailStatus = { sent: false, error: e instanceof Error ? e.message : String(e) };
-          send({ type: 'progress', phase: 'email', message: `Email failed (run still OK): ${emailStatus.error}` });
-        }
-        // Persist a compact run record so the UI history table (and later the
-        // cron) can show when each pull happened. Best-effort: never fail the
-        // run over a history write.
-        try {
-          const u = c.get('user');
-          await appendRunRecord(
-            c.env,
-            recordFromRun(log, emailStatus, false, u?.email || 'unknown', u?.name),
-          );
-        } catch (e) {
-          send({ type: 'progress', phase: 'history', message: `Run-history save failed (run still OK): ${e instanceof Error ? e.message : String(e)}` });
-        }
-        send({ type: 'done', ok: true, dryRun: true, wrote: false, log, email: emailStatus });
+        send({ type: 'done', ok: true, dryRun: true, wrote: false, log, email });
       } catch (e) {
         send({ type: 'error', ok: false, error: e instanceof Error ? e.message : String(e) });
       } finally {
@@ -500,4 +456,21 @@ api.post('/mapping', async (c) => {
 
 app.route('/api', api);
 
-export default app;
+// Scheduled (cron) entry point. No browser, no request origin: uses APP_URL for
+// the email link and tags the run as automated so it shows as
+// "Chopper (automated)" in run history. Still a DRY RUN (no S3 writes).
+async function scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+  const appUrl = env.APP_URL || 'https://staging.optouts.coefficient.org';
+  ctx.waitUntil(
+    runOptOutSync(env, {
+      appUrl,
+      triggeredBy: 'Chopper (automated)',
+      source: 'readygop-cron',
+    }).then(
+      (r) => console.log(`[cron] done: ${r.log.groups.reduce((s, g) => s + g.newCount, 0)} new, email sent=${r.email.sent}`),
+      (e) => console.error(`[cron] failed: ${e instanceof Error ? e.message : String(e)}`),
+    ),
+  );
+}
+
+export default { fetch: app.fetch, scheduled };

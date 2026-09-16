@@ -10,6 +10,7 @@ export interface Env {
   GOOGLE_HOSTED_DOMAIN: string;
   S3_REGION: string;
   APP_ENV?: string;
+  APP_URL?: string; // base URL for email links (cron has no request origin)
   DRIVE_ROOT_FOLDER?: string;
   DRIVE_FOLDER_BIGDOG?: string;
   DRIVE_FOLDER_CREATIVEDIRECT?: string;

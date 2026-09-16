@@ -237,14 +237,12 @@ export function buildRunEmail(
 
   const subject =
     `[Opt-Out Sync] ${log.client}: ${newTotal.toLocaleString()} new` +
-    (quarTotal > 0 ? ` — ${log.quarantined.length} project(s) need mapping` : '');
+    (quarTotal > 0 ? `, ${log.quarantined.length} project(s) need mapping` : '');
 
   // --- plain text ---
   const t: string[] = [];
-  t.push(`Opt-Out Sync run — ${log.client}`);
+  t.push(`Opt-Out Sync run: ${log.client}`);
   t.push(`Ran: ${ranLocal} CT`);
-  t.push('');
-  t.push(`DRY RUN — nothing was written to S3.`);
   t.push('');
   t.push(`New opt-outs (would be uploaded): ${newTotal.toLocaleString()}`);
   t.push(`Pulled this run: ${log.inputOptOuts.toLocaleString()} of ${log.totalCount.toLocaleString()} total`);
@@ -257,7 +255,7 @@ export function buildRunEmail(
     t.push('');
   }
   if (log.quarantined.length) {
-    t.push(`ACTION NEEDED — ${log.quarantined.length} project(s) not mapped, ${quarTotal.toLocaleString()} opt-outs held:`);
+    t.push(`ACTION NEEDED: ${log.quarantined.length} project(s) not mapped, ${quarTotal.toLocaleString()} opt-outs held:`);
     for (const q of log.quarantined) {
       t.push(`  ${q.project} (${q.count.toLocaleString()})`);
     }
@@ -282,8 +280,8 @@ export function buildRunEmail(
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const h: string[] = [];
   h.push(`<div style="font-family:Arial,Helvetica,sans-serif;color:#0a1628;max-width:640px">`);
-  h.push(`<h2 style="margin:0 0 4px">Opt-Out Sync run — ${esc(log.client)}</h2>`);
-  h.push(`<p style="color:#64748b;margin:0 0 14px;font-size:13px">${esc(ranLocal)} CT &middot; <b>DRY RUN</b> — nothing written to S3</p>`);
+  h.push(`<h2 style="margin:0 0 4px">Opt-Out Sync run: ${esc(log.client)}</h2>`);
+  h.push(`<p style="color:#64748b;margin:0 0 14px;font-size:13px">${esc(ranLocal)} CT</p>`);
   h.push(`<div style="font-size:15px;margin:0 0 16px"><b style="color:#16a34a">${newTotal.toLocaleString()}</b> new opt-outs &nbsp;|&nbsp; ${log.inputOptOuts.toLocaleString()} pulled of ${log.totalCount.toLocaleString()} total</div>`);
   if (log.groups.length) {
     h.push(`<table style="border-collapse:collapse;width:100%;font-size:13px;margin:0 0 18px"><thead><tr>`);

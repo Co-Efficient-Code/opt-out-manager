@@ -65,6 +65,14 @@ th{color:var(--muted);font-weight:600}
 .btable .c-rec{width:13%;text-align:right}
 .btable .c-date{width:24%;white-space:nowrap}
 .btable th.c-size,.btable th.c-rec{text-align:right}
+.ptable{table-layout:fixed;width:100%}
+.ptable th,.ptable td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ptable .c-proj{width:48%}
+.ptable .c-pac{width:16%}
+.ptable .c-dest{width:16%}
+.ptable .c-num{width:9%;text-align:right}
+.ptable th.c-num{text-align:right}
+.ptable .c-stat{width:11%}
 </style></head>
 <body>
 <div class="top">
@@ -145,12 +153,10 @@ th{color:var(--muted);font-weight:600}
     </div>
     <div class="card hide" id="rl-groups-card">
       <h2>New opt-outs by PAC + Destination</h2>
-      <p class="sub">The (PAC, Destination) pair is the key. Same PAC under different destinations stays separate.</p>
       <div id="rl-groups"></div>
     </div>
     <div class="card hide" id="rl-quar-card">
       <h2>Quarantined <span class="muted" style="font-weight:400;font-size:13px">(unmapped, not counted for upload)</span></h2>
-      <p class="sub">Projects missing a PAC or destination token. Never guessed, never uploaded. Assign a mapping to clear.</p>
       <div id="rl-quar"></div>
     </div>
     <div class="card hide" id="rl-proj-card">
@@ -594,11 +600,10 @@ async function loadRunlogs(){
     wireAssigns($('#rl-quar'));
   }
   // all projects
-  let ph='<table><thead><tr><th>Project</th><th>PAC</th><th>Destination</th><th style="text-align:right">Opt-outs</th><th>Status</th></tr></thead><tbody>';
-  g.projects.forEach(x=>{var badge=x.status==='mapped'?('<span style="color:#4ade80">mapped'+(x.source==='override'?' (assigned)':'')+'</span>'):'<span style="color:var(--accent)">unmapped</span>';var last=x.status==='mapped'?badge:assignCell(x.project);ph+='<tr><td>'+x.project+'</td><td>'+(x.pac||'<span class="muted">-</span>')+'</td><td>'+(x.destination||'<span class="muted">-</span>')+'</td><td style="text-align:right">'+x.count.toLocaleString()+'</td><td>'+last+'</td></tr>';});
+  let ph='<table class="ptable"><thead><tr><th class="c-proj">Project</th><th class="c-pac">PAC</th><th class="c-dest">Destination</th><th class="c-num">Opt-outs</th><th class="c-stat">Status</th></tr></thead><tbody>';
+  g.projects.forEach(x=>{var badge=x.status==='mapped'?('<span style="color:#4ade80">mapped'+(x.source==='override'?' (assigned)':'')+'</span>'):'<span style="color:var(--accent)">unmapped</span>';ph+='<tr><td class="c-proj">'+x.project+'</td><td class="c-pac">'+(x.pac||'<span class="muted">-</span>')+'</td><td class="c-dest">'+(x.destination||'<span class="muted">-</span>')+'</td><td class="c-num">'+x.count.toLocaleString()+'</td><td class="c-stat">'+badge+'</td></tr>';});
   ph+='</tbody></table>';
   $('#rl-proj').innerHTML=ph;$('#rl-proj-card').classList.remove('hide');
-  wireAssigns($('#rl-proj'));
 }
 // uploaded lists (Google Drive, read-only)
 async function loadUploaded(){

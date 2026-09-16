@@ -71,9 +71,13 @@ export async function pullOptOuts(
     if (!oo) break;
     totalCount = oo.totalCount ?? totalCount;
     for (const n of oo.nodes || []) {
+      // The project number is embedded in name, tab-separated:
+      // "261185\tTX CD 28 Big Dog SAG MMS 9.15". Keep the WHOLE thing (number
+      // included) as the display name; just swap the tab for a space.
+      const nm = (n?.project?.name ?? '').replace(/\t/g, ' ').trim();
       rows.push({
         phone: n?.phone?.number ?? null,
-        project: n?.project?.name ?? '',
+        project: nm,
         createdAt: n?.createdAt ?? null,
       });
     }

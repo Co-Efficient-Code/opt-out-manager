@@ -27,7 +27,9 @@ export const PAC_SLUGS = ['sag-pac', 'no-going-back-pac', 'maga-inc', 'strategic
 export const DESTINATIONS = ['Big Dog', 'Creative Direct'];
 
 export function cleanName(name: string): string {
-  return (name || '').split('\t').pop()?.trim() || '';
+  // Keep the whole name INCLUDING the leading project number; the number is
+  // tab-separated from the description upstream, so just normalize the tab.
+  return (name || '').replace(/\t/g, ' ').trim();
 }
 
 export async function loadOverrides(env: Env): Promise<OverrideMap> {

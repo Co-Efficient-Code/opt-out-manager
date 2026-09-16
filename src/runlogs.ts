@@ -28,7 +28,7 @@ const DEST_TOKENS: [string, string][] = [
 ];
 
 export function parseProject(name: string): { pac: string | null; destination: string | null } {
-  const clean = (name || '').split('\t').pop() || '';
+  const clean = (name || '').replace(/\t/g, ' ');
   const lower = clean.toLowerCase();
   const destination = DEST_TOKENS.find(([t]) => lower.includes(t.toLowerCase()))?.[1] ?? null;
   const pac = PAC_TOKENS.find(([t]) => lower.includes(t.toLowerCase()))?.[1] ?? null;

@@ -9,6 +9,8 @@ import { fileToCsv } from './parsefile';
 import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
 
 import { loadOverrides, setOverride, PAC_SLUGS, DESTINATIONS } from './mapping';
+import { pullOptOuts, MAGA_CLIENT } from './rgop';
+import { buildRunLog, buildOutputFiles } from './runlogs';
 import { loadRunHistory } from './runhistory';
 import { runOptOutSync } from './runner';
 import { renderApp } from './ui';
@@ -444,6 +446,40 @@ api.get('/runlogs/dry-run', async (c) => {
       'X-Accel-Buffering': 'no',
     },
   });
+});
+
+// PREVIEW OUTPUT FILES: run a full pull and return the EXACT CSV files this run
+// WOULD write to S3 (one per mapped (pac,dest) group with new phones), including
+// full content. Writes NOTHING, sends no email, records no history. This is the
+// safe way to verify output format/content before enabling S3 writes.
+api.get('/runlogs/preview-files', async (c) => {
+  try {
+    const { rows, totalCount } = await pullOptOuts(c.env, MAGA_CLIENT.id, {});
+    const log = await buildRunLog(c.env, rows, {
+      client: MAGA_CLIENT.name,
+      source: 'preview',
+      totalCount,
+    });
+    const files = buildOutputFiles(log);
+    return c.json({
+      ok: true,
+      ranAt: log.ranAt,
+      client: log.client,
+      fileCount: files.length,
+      newTotal: files.reduce((s, f) => s + f.rowCount, 0),
+      quarantined: log.quarantined,
+      files: files.map((f) => ({
+        pac: f.pac,
+        destination: f.destination,
+        key: f.key,
+        filename: f.filename,
+        rowCount: f.rowCount,
+        content: f.content,
+      })),
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
 });
 
 // RUN HISTORY: compact record of past pulls (when + counts + email outcome).

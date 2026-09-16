@@ -105,6 +105,7 @@ export interface RunGroup {
   todayUnique: number;
   alreadyReported: number;
   newCount: number;
+  newPhones: string[]; // sorted list of the NEW phones (what would be written)
 }
 export interface ProjectRow {
   project: string;
@@ -188,13 +189,19 @@ export async function buildRunLog(
     const existing = await readExistingPhones(env, destination, pac);
     existingByKey.set(gk, existing);
     let already = 0;
-    for (const p of phones) if (existing.has(p)) already += 1;
+    const newPhones: string[] = [];
+    for (const p of phones) {
+      if (existing.has(p)) already += 1;
+      else newPhones.push(p);
+    }
+    newPhones.sort();
     groupOut.push({
       pac,
       destination,
       todayUnique: phones.size,
       alreadyReported: already,
-      newCount: phones.size - already,
+      newCount: newPhones.length,
+      newPhones,
     });
   }
 
@@ -221,6 +228,64 @@ export async function buildRunLog(
       .sort((a, b) => b.count - a.count),
     projects: [...perProject.values()].sort((a, b) => b.count - a.count),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Output file builder - the SINGLE source of truth for what would be written to
+// S3. Both the preview/download and the future S3 write step use this, so what
+// you verify in preview is byte-for-byte what will land in the bucket.
+// ---------------------------------------------------------------------------
+export interface OutputFile {
+  pac: string;
+  destination: string;
+  bucketRole: 'bigdog' | 'creativedirect';
+  key: string; // full S3 key: optouts/<pac>/optouts_<pac>_<stamp>.csv
+  filename: string; // just the filename
+  rowCount: number; // data rows (excludes header)
+  content: string; // exact CSV bytes (header + rows)
+}
+
+function stampUTC(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}` +
+    `_${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`
+  );
+}
+
+const DEST_ROLE_OUT: Record<string, 'bigdog' | 'creativedirect'> = {
+  'Big Dog': 'bigdog',
+  'Creative Direct': 'creativedirect',
+};
+
+/**
+ * Build the exact output files this run WOULD write to S3. One file per
+ * (pac, destination) group that has new phones. Schema: organization,phone.
+ * Filename/key match the standard: optouts/<pac>/optouts_<pac>_<stamp>.csv.
+ * Groups with zero new phones are skipped (nothing to write).
+ */
+export function buildOutputFiles(log: RunLog): OutputFile[] {
+  const stamp = stampUTC(new Date(log.ranAt));
+  const files: OutputFile[] = [];
+  for (const g of log.groups) {
+    if (!g.newPhones.length) continue;
+    const role = DEST_ROLE_OUT[g.destination];
+    if (!role) continue;
+    const filename = `optouts_${g.pac}_${stamp}.csv`;
+    const key = `optouts/${g.pac}/${filename}`;
+    const content =
+      'organization,phone\n' + g.newPhones.map((p) => `${g.pac},${p}`).join('\n') + '\n';
+    files.push({
+      pac: g.pac,
+      destination: g.destination,
+      bucketRole: role,
+      key,
+      filename,
+      rowCount: g.newPhones.length,
+      content,
+    });
+  }
+  return files;
 }
 
 // Build the run-summary email (HTML + plain text) from a run log.

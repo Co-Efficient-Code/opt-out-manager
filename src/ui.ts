@@ -92,6 +92,25 @@ th{color:var(--muted);font-weight:600}
 .rl-progress .rl-pline{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rl-progress .rl-pline.ok{color:#4ade80}
 .htable{width:100%}
+/* All tables stay within their card: never exceed the container width. */
+.card table{max-width:100%}
+@media (max-width:640px){
+  /* Header: hide the logged-in email, keep Sign out. */
+  .who-email{display:none}
+  .top{padding:12px 16px}
+  .wrap{margin:18px auto;padding:0 12px}
+  .card{padding:16px}
+  /* Tabs: wrap onto multiple rows, taller, smaller font, fully readable. */
+  .tabs{flex-wrap:wrap;gap:6px}
+  .tab{flex:1 1 40%;min-width:0;white-space:normal;overflow:visible;text-overflow:clip;font-size:12px;padding:12px 8px;line-height:1.2}
+  /* Tables: allow horizontal scroll inside the card instead of overflowing. */
+  .card{overflow-x:hidden}
+  table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:normal}
+  /* Let fixed-layout tables shrink and wrap date/text cells on small screens. */
+  .btable,.ptable,.qtable{table-layout:auto;width:100%}
+  .btable .c-date,.ptable .c-proj,.htable .h-when{white-space:normal;word-break:break-word}
+  .stats{grid-template-columns:repeat(2,1fr)}
+}
 .htable .h-when{width:26%}
 .htable .h-by{width:20%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .htable .h-num{text-align:right;width:13%}
@@ -107,7 +126,7 @@ th{color:var(--muted);font-weight:600}
 <body>
 <div class="top">
   <img src="${LOGO}" alt="co/efficient">${envBadge}
-  <div class="who">${user.email} <a href="/auth/logout">Sign out</a></div>
+  <div class="who"><span class="who-email">${user.email}</span> <a href="/auth/logout">Sign out</a></div>
 </div>
 <div class="wrap">
   <div class="tabs">
@@ -130,7 +149,7 @@ th{color:var(--muted);font-weight:600}
         <option value="bigdog">Big Dog Strategies</option>
         <option value="creativedirect">Creative Direct</option>
       </select>
-      <label>Project name <span class="muted" style="font-weight:400">(used as the Drive file name, e.g. 261187 NH Senate Big Dog SAG MMS 9.16)</span></label>
+      <label>Project name</label>
       <input type="text" id="s-project" placeholder="261187 NH Senate Big Dog SAG MMS 9.16" style="width:100%;background:#0a1628;border:1px solid var(--border);color:var(--text);padding:11px 12px;border-radius:8px;font-family:inherit;font-size:14px">
       <label>Contact list (CSV or Excel)</label>
       <div class="drop" id="s-drop">Drop a CSV or Excel file here or click to choose<input type="file" id="s-file" accept=".csv,.xlsx,.xls" class="hide"></div>
@@ -201,7 +220,6 @@ th{color:var(--muted);font-weight:600}
   <div id="browse" class="hide">
     <div class="card">
       <h2>Browse buckets</h2>
-      <p class="sub">Read-only view of folders and files in each S3 bucket. No uploads or downloads.</p>
       <label>Bucket</label>
       <select id="b-bucket">
         <option value="p2p">datadash-p2p (source)</option>
@@ -217,7 +235,6 @@ th{color:var(--muted);font-weight:600}
   <div id="uploaded" class="hide">
     <div class="card">
       <h2>Uploaded lists</h2>
-      <p class="sub">Scrubbed lists saved to Google Drive, by destination. Read-only.</p>
       <div id="u-tree"><span class="muted">Select this tab to load.</span></div>
     </div>
   </div>
@@ -226,7 +243,6 @@ th{color:var(--muted);font-weight:600}
   <div id="docs" class="hide">
     <div class="card">
       <h2>File standards</h2>
-      <p class="sub">These conventions apply to opt-out files in all buckets (p2p, Big Dog, Creative Direct). Both flows follow the same standard.</p>
       <h3 style="font-size:15px;margin:18px 0 6px">Filename convention</h3>
       <div class="stat" style="font-family:monospace;font-size:13px">optouts/&lt;org&gt;/optouts_&lt;org&gt;_&lt;YYYYMMDD&gt;_&lt;HHMMSS&gt;.csv</div>
       <div class="meta" style="margin-top:10px">

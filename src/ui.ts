@@ -171,11 +171,9 @@ th{color:var(--muted);font-weight:600}
       <h2>Opt-out run logs <span class="badge">dry run</span></h2>
       <div class="row">
         <button class="btn" id="rl-run">Run full pull</button>
-        <button class="btn ghost" id="rl-preview">Preview output files</button>
         <span id="rl-status" class="muted"></span>
       </div>
       <div id="rl-progress" class="rl-progress hide"></div>
-      <div id="rl-files" class="hide"></div>
       <div id="rl-summary" class="hide">
         <div class="meta" id="rl-meta" style="margin-top:16px"></div>
         <div class="stats" id="rl-stats" style="margin-top:12px"></div>
@@ -621,39 +619,6 @@ function wireAssigns(root){
         msg.textContent='Saved. Re-running...';
         loadRunlogs();
       }catch(e){msg.textContent='Failed: '+e.message;btn.disabled=false;}
-    };
-  });
-}
-$('#rl-preview').onclick=previewFiles;
-async function previewFiles(){
-  const btn=$('#rl-preview');const st=$('#rl-status');const box=$('#rl-files');
-  btn.disabled=true;st.innerHTML='<span class="spin"></span>Building output files (full pull, ~70s)...';
-  box.classList.add('hide');box.innerHTML='';
-  let d;
-  try{d=await jsonFetch('/api/runlogs/preview-files');}
-  catch(e){st.textContent='Preview failed: '+e.message;btn.disabled=false;return;}
-  btn.disabled=false;
-  if(!d.ok){st.textContent='Preview failed: '+(d.error||'error');return;}
-  st.textContent='';
-  window._previewFiles=d.files||[];
-  let h='<div class="card" style="margin-top:16px"><h2>Output files preview <span class="badge">not written</span></h2>';
-  h+='<p class="sub">These are the exact CSV files this run would write to S3. Nothing was written. '+d.fileCount+' file(s), '+d.newTotal.toLocaleString()+' new opt-outs.</p>';
-  if(!d.files.length){h+='<p class="muted">No files - no new opt-outs in any mapped group this run.</p>';}
-  d.files.forEach(function(f,i){
-    h+='<div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:12px">';
-    h+='<div class="meta"><span>Key: <b>'+f.key+'</b></span><span>Rows: <b>'+f.rowCount.toLocaleString()+'</b></span><span>'+f.pac+' / '+f.destination+'</span></div>';
-    h+='<div style="margin:10px 0"><button class="btn" data-dl="'+i+'" style="padding:8px 14px">Download '+f.filename+'</button></div>';
-    var preview=f.content.split("\\n").slice(0,6).join("\\n");
-    h+='<pre style="background:#0a1628;border:1px solid var(--border);border-radius:6px;padding:10px;overflow:auto;font-size:12px;margin:0">'+preview.replace(/</g,"&lt;")+(f.rowCount>5?"\\n...":"")+'</pre>';
-    h+='</div>';
-  });
-  h+='</div>';
-  box.innerHTML=h;box.classList.remove('hide');
-  box.querySelectorAll('[data-dl]').forEach(function(b){
-    b.onclick=function(){
-      var f=window._previewFiles[+b.dataset.dl];
-      var blob=new Blob([f.content],{type:'text/csv'});
-      var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=f.filename;a.click();
     };
   });
 }

@@ -266,6 +266,17 @@ export function buildRunEmail(
   } else {
     t.push('All projects mapped. No action needed.');
   }
+  if (log.projects.length) {
+    t.push('');
+    t.push('Project breakdown (new / total):');
+    for (const p of log.projects) {
+      const nt = p.status === 'mapped' && p.newCount != null
+        ? `${p.newCount.toLocaleString()} / ${p.count.toLocaleString()}`
+        : `- / ${p.count.toLocaleString()}`;
+      const map = p.pac && p.destination ? `${p.pac} / ${p.destination}` : 'UNMAPPED';
+      t.push(`  ${p.project}: ${nt}  [${map}]`);
+    }
+  }
 
   // --- html ---
   const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -293,6 +304,22 @@ export function buildRunEmail(
     h.push(`</div>`);
   } else {
     h.push(`<div style="color:#16a34a;font-weight:600;font-size:13px">All projects mapped. No action needed.</div>`);
+  }
+  // Per-project breakdown
+  if (log.projects.length) {
+    h.push(`<h3 style="font-size:15px;margin:22px 0 6px">Project breakdown</h3>`);
+    h.push(`<table style="border-collapse:collapse;width:100%;font-size:13px"><thead><tr>`);
+    h.push(`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Project</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">PAC</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Destination</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">New</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">Total</th></tr></thead><tbody>`);
+    for (const p of log.projects) {
+      const mapped = p.status === 'mapped';
+      const newCell = mapped && p.newCount != null
+        ? `<span style="color:#16a34a;font-weight:600">${p.newCount.toLocaleString()}</span>`
+        : '<span style="color:#b91c1c">held</span>';
+      const pacCell = p.pac ? esc(p.pac) : '<span style="color:#b91c1c">-</span>';
+      const destCell = p.destination ? esc(p.destination) : '<span style="color:#b91c1c">-</span>';
+      h.push(`<tr><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(p.project)}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${pacCell}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${destCell}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9">${newCell}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#64748b">${p.count.toLocaleString()}</td></tr>`);
+    }
+    h.push(`</tbody></table>`);
   }
   h.push(`</div>`);
 

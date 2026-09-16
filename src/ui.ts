@@ -108,14 +108,20 @@ th{color:var(--muted);font-weight:600}
      never crushed (the "When" column stays readable on one line). */
   .card>table,.card>div>table,#rl-hist table,#b-tree table,#u-tree table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
   table th,table td{white-space:nowrap}
-  /* keep Triggered by wrapping even on mobile so it stays a narrow column */
-  .htable .h-by{white-space:normal;word-break:break-word;min-width:90px}
+  /* Triggered by: wrap at word boundaries (so "(automated)" breaks as a whole
+     word, not mid-word), wide enough to fit "(automated)" on one line. */
+  .htable .h-by{white-space:normal;overflow-wrap:break-word;word-break:normal;min-width:112px}
+  /* When: allow a gentle wrap so it does not hog width. */
+  .htable .h-when{white-space:normal;min-width:120px}
   .stats{grid-template-columns:repeat(2,1fr)}
 }
-/* Triggered by: narrow column; long values like "Chopper (automated)" wrap to a
-   second line instead of forcing the column wide. */
-.htable .h-when{width:22%;white-space:nowrap}
-.htable .h-by{width:14%;white-space:normal;word-break:break-word}
+/* Monospace convention/example boxes: keep long strings contained (wrap, never
+   overflow the card). */
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:13px;white-space:normal;overflow-wrap:anywhere;word-break:break-word}
+/* When: let the date wrap a little instead of eating width. Triggered by: a bit
+   wider so "(automated)" wraps as a whole word, not "automate/d". */
+.htable .h-when{width:20%;white-space:normal}
+.htable .h-by{width:18%;white-space:normal;overflow-wrap:break-word}
 .htable .h-num{text-align:right;width:13%}
 .htable th.h-num{text-align:right}
 .htable .h-email{width:15%;text-align:center}
@@ -247,7 +253,7 @@ th{color:var(--muted);font-weight:600}
     <div class="card">
       <h2>File standards</h2>
       <h3 style="font-size:15px;margin:18px 0 6px">Filename convention</h3>
-      <div class="stat" style="font-family:monospace;font-size:13px">optouts/&lt;org&gt;/optouts_&lt;org&gt;_&lt;YYYYMMDD&gt;_&lt;HHMMSS&gt;.csv</div>
+      <div class="stat mono">optouts/&lt;org&gt;/optouts_&lt;org&gt;_&lt;YYYYMMDD&gt;_&lt;HHMMSS&gt;.csv</div>
       <div class="meta" style="margin-top:10px">
         <span>Prefix: <b>optouts/</b></span>
         <span>One folder per org (PAC slug)</span>
@@ -256,7 +262,7 @@ th{color:var(--muted);font-weight:600}
       <p class="muted" style="font-size:13px;margin-top:8px">Example: <code>optouts/sag-pac/optouts_sag-pac_20260915_125300.csv</code></p>
 
       <h3 style="font-size:15px;margin:22px 0 6px">Schema</h3>
-      <div class="stat" style="font-family:monospace;font-size:13px">organization,phone<br>sag-pac,2012109783</div>
+      <div class="stat mono">organization,phone<br>sag-pac,2012109783</div>
       <div class="meta" style="margin-top:10px">
         <span>Header exactly: <b>organization,phone</b></span>
         <span><b>organization</b> = org slug (lowercase, hyphenated)</span>
@@ -276,7 +282,7 @@ th{color:var(--muted);font-weight:600}
       <h2>How we read opt-outs from ReadyGOP</h2>
       <p class="sub">ReadyGOP is the texting platform that holds the live opt-outs. We read them through an internal proxy; the app never talks to ReadyGOP directly and never writes to it.</p>
       <h3 style="font-size:15px;margin:18px 0 6px">Endpoint and method</h3>
-      <div class="stat" style="font-family:monospace;font-size:13px">POST https://tools.coefficient.org/api/rgop-proxy</div>
+      <div class="stat mono">POST https://tools.coefficient.org/api/rgop-proxy</div>
       <ul style="color:var(--muted);font-size:14px;line-height:1.6;margin:8px 0 0;padding-left:20px">
         <li><b style="color:var(--text)">Method:</b> HTTP <b style="color:var(--text)">POST</b>, body is a GraphQL query (Content-Type application/json).</li>
         <li><b style="color:var(--text)">Proxy:</b> a pass-through to ReadyGOP's GraphQL API (api.readygop.com/graphql). The proxy injects the auth token, so the key stays server-side.</li>

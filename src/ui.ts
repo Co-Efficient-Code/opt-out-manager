@@ -32,8 +32,9 @@ a{color:var(--blue)}
 .badge{background:var(--accent);color:#fff;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:10px;text-transform:uppercase;letter-spacing:.5px}
 .wrap{max-width:960px;margin:32px auto;padding:0 24px}
 .tabs{display:flex;gap:8px;margin-bottom:24px}
-.tab{background:var(--card);border:1px solid var(--border);color:var(--muted);padding:10px 18px;border-radius:8px;cursor:pointer;font-weight:600;font-family:'Inter'}
+.tab{flex:1 1 0;min-width:0;text-align:center;background:var(--card);border:1px solid var(--border);color:var(--muted);padding:10px 12px;border-radius:8px;cursor:pointer;font-weight:600;font-family:'Inter';white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tab.active{color:#fff;border-color:var(--accent);background:linear-gradient(180deg,var(--card),#12294a)}
+.tab.disabled{opacity:.4;cursor:not-allowed;color:var(--subtle)}
 .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:24px;margin-bottom:20px}
 .card h2{font-size:18px;margin-bottom:6px}
 .card p.sub{color:var(--muted);margin:0 0 18px;font-size:14px}
@@ -105,10 +106,10 @@ th{color:var(--muted);font-weight:600}
   <div class="tabs">
     <div class="tab active" data-tab="scrub">Scrub a list</div>
     <div class="tab" data-tab="runlogs">Run logs</div>
-    <div class="tab" data-tab="push">Upload opt-outs</div>
     <div class="tab" data-tab="uploaded">Uploaded lists</div>
     <div class="tab" data-tab="browse">Browse buckets</div>
     <div class="tab" data-tab="docs">Documentation</div>
+    <div class="tab disabled" data-tab="push" title="Retired: opt-out uploads are moving to the automated ReadyGOP sync">Upload opt-outs</div>
   </div>
 
   <!-- SCRUB -->
@@ -363,6 +364,7 @@ async function loadDestAccounts(dest){
 $('#p-dest').addEventListener('change',()=>loadDestAccounts($('#p-dest').value));
 // tabs
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  if(t.classList.contains('disabled'))return;
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');
   $('#scrub').classList.toggle('hide',t.dataset.tab!=='scrub');

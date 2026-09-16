@@ -60,10 +60,10 @@ table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px}
 th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--border)}
 th{color:var(--muted);font-weight:600}
 .btable{table-layout:fixed}
-.btable .c-file{width:28%;word-break:break-all;white-space:normal}
-.btable .c-size{width:14%;text-align:right}
-.btable .c-rec{width:16%;text-align:right}
-.btable .c-date{width:42%;white-space:normal;overflow-wrap:break-word}
+.btable .c-file{width:52%;word-break:break-all}
+.btable .c-size{width:11%;text-align:right}
+.btable .c-rec{width:13%;text-align:right}
+.btable .c-date{width:24%;white-space:nowrap}
 .btable th.c-size,.btable th.c-rec{text-align:right}
 .ptable{table-layout:fixed;width:100%}
 .ptable th,.ptable td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -113,9 +113,6 @@ th{color:var(--muted);font-weight:600}
   .htable .h-by{white-space:normal;overflow-wrap:break-word;word-break:normal;min-width:112px}
   /* When: allow a gentle wrap so it does not hog width. */
   .htable .h-when{white-space:normal;min-width:120px}
-  /* Browse/Uploaded: narrow File, wrap File + Uploaded values. */
-  .btable .c-file{white-space:normal;word-break:break-all;min-width:80px}
-  .btable .c-date{white-space:normal;overflow-wrap:break-word;min-width:96px}
   .stats{grid-template-columns:repeat(2,1fr)}
 }
 /* Monospace convention/example boxes: keep long strings contained (wrap, never

@@ -76,12 +76,15 @@ th{color:var(--muted);font-weight:600}
 .ptable .c-stat{width:6%;text-align:center;overflow:visible}
 .ptable th.c-stat{text-align:center}
 .qtable{table-layout:fixed;width:100%}
-.qtable .q-proj{width:38%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.qtable .q-held{width:12%;text-align:right}
+.qtable td,.qtable th{vertical-align:bottom}
+.qtable .q-proj{width:34%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle}
+.qtable .q-held{width:16%;text-align:right;white-space:nowrap;vertical-align:middle}
 .qtable th.q-held{text-align:right}
 .qtable .q-assign{width:50%}
-.assign{display:flex;gap:8px;align-items:center}
-.assign .asg-pac,.assign .asg-dest{flex:1 1 0;min-width:0}
+.assign{display:flex;gap:8px;align-items:flex-end}
+.assign .asg-field{flex:1 1 0;min-width:0}
+.assign .asg-field label{display:block;color:var(--muted);font-size:12px;margin:0 0 4px;font-weight:500}
+.assign .asg-pac,.assign .asg-dest{width:100%}
 .assign .asg-save{flex:0 0 auto}
 .assign .asg-msg{flex:0 0 auto}
 .ic{display:inline-flex;vertical-align:middle}
@@ -577,11 +580,11 @@ $('#b-bucket').addEventListener('change',loadBrowse);
 let rlPacs=[],rlDests=[];
 function assignCell(project){
   var pid=project.replace(/[^a-z0-9]/gi,'_');
-  var pacOpts='<option value="">PAC...</option>'+rlPacs.map(function(p){return '<option value="'+p+'">'+p+'</option>';}).join('');
-  var destOpts='<option value="">Destination...</option>'+rlDests.map(function(dv){return '<option value="'+dv+'">'+dv+'</option>';}).join('');
+  var pacOpts='<option value="">Select...</option>'+rlPacs.map(function(p){return '<option value="'+p+'">'+p+'</option>';}).join('');
+  var destOpts='<option value="">Select...</option>'+rlDests.map(function(dv){return '<option value="'+dv+'">'+dv+'</option>';}).join('');
   return '<span class="assign" data-project="'+encodeURIComponent(project)+'">'+
-    '<select class="asg-pac">'+pacOpts+'</select>'+
-    '<select class="asg-dest">'+destOpts+'</select>'+
+    '<span class="asg-field"><label>PAC</label><select class="asg-pac">'+pacOpts+'</select></span>'+
+    '<span class="asg-field"><label>Destination</label><select class="asg-dest">'+destOpts+'</select></span>'+
     '<button class="btn asg-save" style="padding:6px 12px">Save</button>'+
     '<span class="asg-msg muted"></span></span>';
 }
@@ -635,7 +638,7 @@ async function loadRunlogs(){
   $('#rl-groups').innerHTML=gh;$('#rl-groups-card').classList.remove('hide');
   // quarantine
   if(g.quarantined.length){
-    let qh='<table class="qtable"><thead><tr><th class="q-proj">Project</th><th class="q-held">Opt-outs held</th><th class="q-assign">Assign PAC + Destination</th></tr></thead><tbody>';
+    let qh='<table class="qtable"><thead><tr><th class="q-proj">Project</th><th class="q-held">Opt-outs held</th><th class="q-assign"></th></tr></thead><tbody>';
     g.quarantined.forEach(x=>{qh+='<tr><td class="q-proj" title="'+x.project.replace(/"/g,'&quot;')+'">'+x.project+'</td><td class="q-held" style="color:var(--accent)">'+x.count.toLocaleString()+'</td><td class="q-assign">'+assignCell(x.project)+'</td></tr>';});
     qh+='</tbody></table>';
     $('#rl-quar').innerHTML=qh;$('#rl-quar-card').classList.remove('hide');

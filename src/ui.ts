@@ -174,13 +174,13 @@ th{color:var(--muted);font-weight:600}
         <div class="stats" id="rl-stats" style="margin-top:12px"></div>
       </div>
     </div>
-    <div class="card hide" id="rl-groups-card">
-      <h2>New opt-outs by PAC + Destination</h2>
-      <div id="rl-groups"></div>
-    </div>
     <div class="card hide" id="rl-quar-card">
       <h2>Quarantined <span class="muted" style="font-weight:400;font-size:13px">(unmapped, not counted for upload)</span></h2>
       <div id="rl-quar"></div>
+    </div>
+    <div class="card hide" id="rl-groups-card">
+      <h2>New opt-outs</h2>
+      <div id="rl-groups"></div>
     </div>
     <div class="card hide" id="rl-proj-card">
       <h2>All projects</h2>

@@ -109,7 +109,6 @@ th{color:var(--muted);font-weight:600}
     <div class="tab" data-tab="uploaded">Uploaded lists</div>
     <div class="tab" data-tab="browse">Browse buckets</div>
     <div class="tab" data-tab="docs">Documentation</div>
-    <div class="tab disabled" data-tab="push" title="Retired: opt-out uploads are moving to the automated ReadyGOP sync">Upload opt-outs</div>
   </div>
 
   <!-- SCRUB -->

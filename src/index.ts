@@ -372,22 +372,53 @@ api.post('/push', async (c) => {
   }
 });
 
-// RUN LOGS (dry-run): pull opt-outs from ReadyGOP, parse (pac, destination),
-// read back existing opt-outs from S3 (READ ONLY), and report what WOULD be
-// new. Writes NOTHING to S3 or anywhere. This is the read-only funnel view.
+// RUN LOGS (dry-run): FULL pull of opt-outs from ReadyGOP (every page, no cap),
+// parse (pac, destination), read back existing opt-outs from S3 (READ ONLY),
+// and report what WOULD be new. Writes NOTHING anywhere.
+//
+// Streams NDJSON progress so the UI can show live status during the full pull:
+//   {"type":"progress", ...}   one per page pulled / read-back phase
+//   {"type":"done", log:{...}} final run log
+//   {"type":"error", error} on failure
 api.get('/runlogs/dry-run', async (c) => {
-  const maxRows = Math.min(Number(c.req.query('max') || '2000') || 2000, 40000);
-  try {
-    const { rows, totalCount } = await pullOptOuts(c.env, MAGA_CLIENT.id, { maxRows });
-    const log = await buildRunLog(c.env, rows, {
-      client: MAGA_CLIENT.name,
-      source: 'readygop-live',
-      totalCount,
-    });
-    return c.json({ ok: true, dryRun: true, wrote: false, log });
-  } catch (e) {
-    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
-  }
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+      try {
+        send({ type: 'progress', phase: 'pull', message: 'Connecting to ReadyGOP...' });
+        const { rows, totalCount } = await pullOptOuts(c.env, MAGA_CLIENT.id, {
+          onProgress: (p) =>
+            send({
+              type: 'progress',
+              phase: 'pull',
+              page: p.page,
+              pulled: p.pulled,
+              totalCount: p.totalCount,
+              message: `Pulling from ReadyGOP: ${p.pulled.toLocaleString()}${p.totalCount ? ' of ' + p.totalCount.toLocaleString() : ''} opt-outs (page ${p.page})`,
+            }),
+        });
+        const log = await buildRunLog(
+          c.env,
+          rows,
+          { client: MAGA_CLIENT.name, source: 'readygop-live', totalCount },
+          (msg) => send({ type: 'progress', phase: 'readback', message: msg }),
+        );
+        send({ type: 'done', ok: true, dryRun: true, wrote: false, log });
+      } catch (e) {
+        send({ type: 'error', ok: false, error: e instanceof Error ? e.message : String(e) });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no',
+    },
+  });
 });
 
 // MAPPING: read current human-assigned project overrides + the canonical

@@ -134,7 +134,10 @@ export async function buildRunLog(
   env: Env,
   rows: RgopOptOut[],
   meta: { client: string; source: string; totalCount: number },
+  onPhase?: (msg: string) => void | Promise<void>,
 ): Promise<RunLog> {
+  const say = async (m: string) => { if (onPhase) await onPhase(m); };
+  await say('Loading saved project mappings');
   const overrides: OverrideMap = await loadOverrides(env);
   const groups = new Map<string, Set<string>>(); // "pac|dest" -> phones
   const projectPhones = new Map<string, Set<string>>(); // project -> phones
@@ -176,8 +179,12 @@ export async function buildRunLog(
   // Read-back existing phones once per (pac, destination) folder (READ ONLY).
   const existingByKey = new Map<string, Set<string>>();
   const groupOut: RunGroup[] = [];
-  for (const [gk, phones] of [...groups.entries()].sort()) {
+  const groupKeys = [...groups.entries()].sort();
+  let gi = 0;
+  for (const [gk, phones] of groupKeys) {
     const [pac, destination] = gk.split('|');
+    gi += 1;
+    await say(`Reading existing opt-outs from S3 (${gi}/${groupKeys.length}): ${pac} / ${destination}`);
     const existing = await readExistingPhones(env, destination, pac);
     existingByKey.set(gk, existing);
     let already = 0;

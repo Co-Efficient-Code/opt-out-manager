@@ -48,24 +48,33 @@ async function gql(env: Env, query: string, variables: unknown): Promise<any> {
   return data;
 }
 
+export interface PullProgress {
+  page: number;
+  pulled: number;
+  totalCount: number;
+}
+
 /**
- * Pull opt-outs for a client, newest first, via cursor pagination.
- * maxRows caps the pull so a dry-run UI call stays fast; pass 0 for all.
+ * Pull ALL opt-outs for a client, newest first, via cursor pagination.
+ *
+ * Full pull every time (no cap). Pass onProgress to get a callback after each
+ * page so the caller can stream live status to the UI. maxRows defaults to 0
+ * (unlimited); set it only for tests.
  */
 export async function pullOptOuts(
   env: Env,
   clientId: string,
-  opts: { pageSize?: number; maxRows?: number } = {},
+  opts: { pageSize?: number; maxRows?: number; onProgress?: (p: PullProgress) => void | Promise<void> } = {},
 ): Promise<{ rows: RgopOptOut[]; totalCount: number }> {
   const pageSize = opts.pageSize ?? 500;
-  const maxRows = opts.maxRows ?? 2000;
+  const maxRows = opts.maxRows ?? 0; // 0 = pull everything
   const filters = [{ field: 'clientId', operation: 'EQUAL', value: clientId }];
   const rows: RgopOptOut[] = [];
   let cursor = 'MA';
   const seen = new Set<string>(['MA']);
   let totalCount = 0;
 
-  for (let i = 0; i < 500; i++) {
+  for (let i = 0; i < 1000; i++) {
     const d = await gql(env, OPTOUTS_QUERY, { first: pageSize, after: cursor, f: filters });
     const oo = d?.data?.optOuts;
     if (!oo) break;
@@ -81,6 +90,7 @@ export async function pullOptOuts(
         createdAt: n?.createdAt ?? null,
       });
     }
+    if (opts.onProgress) await opts.onProgress({ page: i + 1, pulled: rows.length, totalCount });
     if (maxRows && rows.length >= maxRows) break;
     const next = (oo.cursors || []).find((c: string) => !seen.has(c));
     if (!next) break;

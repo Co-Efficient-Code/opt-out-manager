@@ -87,6 +87,9 @@ th{color:var(--muted);font-weight:600}
 .assign .asg-pac,.assign .asg-dest{width:100%}
 .assign .asg-save{flex:0 0 auto}
 .assign .asg-msg{flex:0 0 auto}
+.rl-progress{margin-top:14px;max-height:180px;overflow-y:auto;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.6}
+.rl-progress .rl-pline{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rl-progress .rl-pline.ok{color:#4ade80}
 .ic{display:inline-flex;vertical-align:middle}
 .ic svg{width:17px;height:17px}
 .ic-ok{color:#4ade80}.ic-block{color:#f87171}
@@ -162,9 +165,10 @@ th{color:var(--muted);font-weight:600}
       <h2>Opt-out run logs <span class="badge">dry run</span></h2>
       <p class="sub">Live pull from ReadyGOP for MAGA, Inc. Each opt-out is parsed into a (PAC, Destination) pair, then checked against existing opt-outs already in the S3 folder to see what would be new. This view is READ ONLY. Nothing is written to any bucket.</p>
       <div class="row">
-        <button class="btn" id="rl-run">Run dry-run pull</button>
+        <button class="btn" id="rl-run">Run full pull</button>
         <span id="rl-status" class="muted"></span>
       </div>
+      <div id="rl-progress" class="rl-progress hide"></div>
       <div id="rl-summary" class="hide">
         <div class="meta" id="rl-meta" style="margin-top:16px"></div>
         <div class="stats" id="rl-stats" style="margin-top:12px"></div>
@@ -609,14 +613,46 @@ function wireAssigns(root){
 }
 $('#rl-run').onclick=loadRunlogs;
 async function loadRunlogs(){
-  const btn=$('#rl-run');const st=$('#rl-status');
-  btn.disabled=true;st.innerHTML='<span class="spin"></span>Pulling from ReadyGOP...';
+  const btn=$('#rl-run');const st=$('#rl-status');const prog=$('#rl-progress');
+  btn.disabled=true;st.innerHTML='<span class="spin"></span>Starting full pull...';
+  prog.classList.remove('hide');prog.innerHTML='';
   ['#rl-summary','#rl-groups-card','#rl-quar-card','#rl-proj-card'].forEach(id=>$(id).classList.add('hide'));
-  let d;
-  try{d=await jsonFetch('/api/runlogs/dry-run');}
-  catch(e){st.textContent='Failed: '+e.message;btn.disabled=false;return;}
+  // Stream NDJSON progress from the full pull so the user can watch it work.
+  let d=null;
+  function logLine(msg,cls){
+    var el=document.createElement('div');
+    el.className='rl-pline'+(cls?' '+cls:'');
+    el.textContent=msg;
+    prog.appendChild(el);
+    prog.scrollTop=prog.scrollHeight;
+  }
+  try{
+    const r=await fetch('/api/runlogs/dry-run');
+    if(r.redirected && r.url.indexOf('/auth/login')>=0){window.location.href='/auth/login';return;}
+    if(!r.body)throw new Error('No response stream');
+    const reader=r.body.getReader();const dec=new TextDecoder();let buf='';
+    while(true){
+      const {value,done}=await reader.read();
+      if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let nl;
+      while((nl=buf.indexOf('\n'))>=0){
+        const line=buf.slice(0,nl).trim();buf=buf.slice(nl+1);
+        if(!line)continue;
+        let ev;try{ev=JSON.parse(line);}catch(e){continue;}
+        if(ev.type==='progress'){
+          st.innerHTML='<span class="spin"></span>'+(ev.message||'Working...');
+          logLine(ev.message||'');
+        }else if(ev.type==='error'){
+          throw new Error(ev.error||'unknown error');
+        }else if(ev.type==='done'){
+          d=ev;logLine('Done.','ok');
+        }
+      }
+    }
+  }catch(e){st.textContent='Failed: '+e.message;btn.disabled=false;return;}
   btn.disabled=false;
-  if(!d.ok||d.error){st.textContent='Failed: '+(d.error||'unknown error');return;}
+  if(!d||!d.ok||d.error){st.textContent='Failed: '+((d&&d.error)||'no result returned');return;}
   st.textContent='';
   const g=d.log;
   // load canonical option lists for assign dropdowns (once)

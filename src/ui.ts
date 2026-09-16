@@ -636,7 +636,7 @@ async function loadRunlogs(){
       if(done)break;
       buf+=dec.decode(value,{stream:true});
       let nl;
-      while((nl=buf.indexOf('\n'))>=0){
+      while((nl=buf.indexOf('\\n'))>=0){
         const line=buf.slice(0,nl).trim();buf=buf.slice(nl+1);
         if(!line)continue;
         let ev;try{ev=JSON.parse(line);}catch(e){continue;}

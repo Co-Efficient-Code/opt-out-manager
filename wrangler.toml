@@ -35,10 +35,9 @@ DRIVE_ROOT_FOLDER = "1E8nIqiFBWzlervF0PNtBuZrGWxdqQ4mF"
 DRIVE_FOLDER_BIGDOG = "1SpcxvbNQPOFUFvwJOZoW70F1IzRg07pJ"
 DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
 
-# Scheduled runs (UTC). TEMP one-off test time set for today; real twice-daily
-# schedule replaces this once verified.
-[env.staging.triggers]
-crons = ["45 19 * * *"]
+# Scheduling is driven by GitHub Actions (.github/workflows/cron.yml) hitting
+# the token-guarded /cron/run endpoint. GitHub gives visible logs and no Worker
+# runtime limit. Native Cloudflare cron was removed (fired unreliably).
 
 # ============================================
 # PRODUCTION  ->  optouts.coefficient.org

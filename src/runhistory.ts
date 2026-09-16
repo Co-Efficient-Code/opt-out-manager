@@ -10,7 +10,7 @@ import type { RunLog } from './runlogs';
  * summary counts). No S3 involved. Nothing is written to client data.
  */
 
-const KEY = '***';
+const KEY = 'run_history';
 const MAX_RUNS = 50;
 
 export interface RunRecord {

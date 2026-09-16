@@ -1,0 +1,60 @@
+name: Opt-Out Sync Cron
+
+# Triggers the opt-out sync run on a schedule by calling the Worker's
+# token-guarded /cron/run endpoint. All the real work (ReadyGOP pull, S3
+# read-back, email, history) happens inside the Worker; this job is just a
+# reliable clock with visible logs.
+#
+# Still a DRY RUN: the Worker writes nothing to S3.
+
+on:
+  schedule:
+    # Twice daily, UTC. 12:00 UTC (7am CT) and 00:00 UTC (7pm CT).
+    # GitHub cron is best-effort and can lag several minutes.
+    - cron: '0 12 * * *'
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which environment to run'
+        type: choice
+        required: true
+        default: 'staging'
+        options:
+          - staging
+          - production
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger opt-out sync
+        env:
+          # Set these as repo secrets. Staging pair is required; production
+          # optional until we schedule prod.
+          STAGING_URL: ${{ secrets.OPTOUT_STAGING_URL }}
+          STAGING_CRON_SECRET: ${{ secrets.OPTOUT_STAGING_CRON_SECRET }}
+          PROD_URL: ${{ secrets.OPTOUT_PROD_URL }}
+          PROD_CRON_SECRET: ${{ secrets.OPTOUT_PROD_CRON_SECRET }}
+          TARGET: ${{ github.event.inputs.target || 'staging' }}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET" = "production" ]; then
+            URL="$PROD_URL"; SECRET="$PROD_CRON_SECRET"
+          else
+            URL="$STAGING_URL"; SECRET="$STAGING_CRON_SECRET"
+          fi
+          if [ -z "${URL:-}" ] || [ -z "${SECRET:-}" ]; then
+            echo "Missing URL or CRON secret for target=$TARGET"; exit 1
+          fi
+          echo "Triggering opt-out sync ($TARGET) at $(date -u) ..."
+          # The full pull takes ~90s; allow generous time.
+          HTTP=$(curl -sS -m 300 -o /tmp/resp.json -w '%{http_code}' \
+            -X POST "$URL/cron/run" \
+            -H "Authorization: Bearer $SECRET")
+          echo "HTTP $HTTP"
+          cat /tmp/resp.json
+          echo
+          if [ "$HTTP" != "200" ]; then
+            echo "Cron run failed (HTTP $HTTP)"; exit 1
+          fi

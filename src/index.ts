@@ -38,6 +38,39 @@ app.get('/health', (c) =>
   c.json({ ok: true, service: 'opt-out-manager', env: c.env.APP_ENV ?? 'unknown' }),
 );
 
+// CRON TRIGGER: external scheduler (GitHub Actions) POSTs here to run the sync.
+// Guarded by a shared bearer token (CRON_SECRET), so it is mounted BEFORE the
+// Google-login middleware. Runs the same runOptOutSync as the button + native
+// cron. Still a DRY RUN (no S3 writes). Returns the summary JSON.
+app.post('/cron/run', async (c) => {
+  const secret = c.env.CRON_SECRET;
+  const auth = c.req.header('Authorization') || '';
+  const provided = auth.replace(/^Bearer\s+/i, '');
+  if (!secret || provided !== secret) {
+    return c.json({ ok: false, error: 'unauthorized' }, 401);
+  }
+  try {
+    const appUrl = c.env.APP_URL || new URL(c.req.url).origin;
+    const { log, email } = await runOptOutSync(c.env, {
+      appUrl,
+      triggeredBy: 'Chopper (automated)',
+      source: 'readygop-cron',
+    });
+    return c.json({
+      ok: true,
+      dryRun: true,
+      wrote: false,
+      ranAt: log.ranAt,
+      newTotal: log.groups.reduce((s, g) => s + g.newCount, 0),
+      quarantinedProjects: log.quarantined.length,
+      emailSent: email.sent,
+      emailError: email.error,
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
 app.route('/auth', authRoutes);
 app.use('*', requireAuth());
 

@@ -74,6 +74,7 @@ th{color:var(--muted);font-weight:600}
 <div class="wrap">
   <div class="tabs">
     <div class="tab active" data-tab="scrub">Scrub a list</div>
+    <div class="tab" data-tab="runlogs">Run logs</div>
     <div class="tab" data-tab="push">Upload opt-outs</div>
     <div class="tab" data-tab="uploaded">Uploaded lists</div>
     <div class="tab" data-tab="browse">Browse buckets</div>
@@ -125,6 +126,36 @@ th{color:var(--muted);font-weight:600}
         <button class="btn ghost" id="s-reset">Scrub another</button>
       </div>
       <div class="note hide" id="s-drive-msg" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- RUN LOGS (dry-run, read-only) -->
+  <div id="runlogs" class="hide">
+    <div class="card">
+      <h2>Opt-out run logs <span class="badge">dry run</span></h2>
+      <p class="sub">Live pull from ReadyGOP for MAGA, Inc. Each opt-out is parsed into a (PAC, Destination) pair, then checked against existing opt-outs already in the S3 folder to see what would be new. This view is READ ONLY. Nothing is written to any bucket.</p>
+      <div class="row">
+        <button class="btn" id="rl-run">Run dry-run pull</button>
+        <span id="rl-status" class="muted"></span>
+      </div>
+      <div id="rl-summary" class="hide">
+        <div class="meta" id="rl-meta" style="margin-top:16px"></div>
+        <div class="stats" id="rl-stats" style="margin-top:12px"></div>
+      </div>
+    </div>
+    <div class="card hide" id="rl-groups-card">
+      <h2>New opt-outs by PAC + Destination</h2>
+      <p class="sub">The (PAC, Destination) pair is the key. Same PAC under different destinations stays separate.</p>
+      <div id="rl-groups"></div>
+    </div>
+    <div class="card hide" id="rl-quar-card">
+      <h2>Quarantined <span class="muted" style="font-weight:400;font-size:13px">(unmapped, not counted for upload)</span></h2>
+      <p class="sub">Projects missing a PAC or destination token. Never guessed, never uploaded. Assign a mapping to clear.</p>
+      <div id="rl-quar"></div>
+    </div>
+    <div class="card hide" id="rl-proj-card">
+      <h2>All projects</h2>
+      <div id="rl-proj"></div>
     </div>
   </div>
 
@@ -280,6 +311,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
   t.classList.add('active');
   $('#scrub').classList.toggle('hide',t.dataset.tab!=='scrub');
+  $('#runlogs').classList.toggle('hide',t.dataset.tab!=='runlogs');
   $('#push').classList.toggle('hide',t.dataset.tab!=='push');
   $('#docs').classList.toggle('hide',t.dataset.tab!=='docs');
   $('#browse').classList.toggle('hide',t.dataset.tab!=='browse');
@@ -493,6 +525,47 @@ async function loadBrowse(){
   }
 }
 $('#b-bucket').addEventListener('change',loadBrowse);
+// run logs (dry-run, read-only)
+$('#rl-run').onclick=loadRunlogs;
+async function loadRunlogs(){
+  const btn=$('#rl-run');const st=$('#rl-status');
+  btn.disabled=true;st.innerHTML='<span class="spin"></span>Pulling from ReadyGOP...';
+  ['#rl-summary','#rl-groups-card','#rl-quar-card','#rl-proj-card'].forEach(id=>$(id).classList.add('hide'));
+  let d;
+  try{d=await jsonFetch('/api/runlogs/dry-run');}
+  catch(e){st.textContent='Failed: '+e.message;btn.disabled=false;return;}
+  btn.disabled=false;
+  if(!d.ok||d.error){st.textContent='Failed: '+(d.error||'unknown error');return;}
+  st.textContent='';
+  const g=d.log;
+  const newTotal=g.groups.reduce((s,x)=>s+x.newCount,0);
+  const quarTotal=g.quarantined.reduce((s,x)=>s+x.count,0);
+  $('#rl-meta').innerHTML='<span>Client: <b>'+g.client+'</b></span><span>Ran: <b>'+fmtDate(g.ranAt)+'</b></span><span>Client total opt-outs: <b>'+g.totalCount.toLocaleString()+'</b></span><span>Pulled this run: <b>'+g.inputOptOuts.toLocaleString()+'</b></span>';
+  $('#rl-stats').innerHTML=
+    '<div class="stat"><div class="n good">'+newTotal.toLocaleString()+'</div><div class="l">New opt-outs</div></div>'+
+    '<div class="stat"><div class="n">'+g.groups.length+'</div><div class="l">PAC+Destination groups</div></div>'+
+    '<div class="stat"><div class="n warn">'+quarTotal.toLocaleString()+'</div><div class="l">Quarantined</div></div>'+
+    '<div class="stat"><div class="n">'+g.projects.length+'</div><div class="l">Projects seen</div></div>';
+  $('#rl-summary').classList.remove('hide');
+  // groups
+  let gh='<table><thead><tr><th>PAC</th><th>Destination</th><th style="text-align:right">Pulled (unique)</th><th style="text-align:right">Already reported</th><th style="text-align:right">New</th></tr></thead><tbody>';
+  g.groups.forEach(x=>{gh+='<tr><td>'+x.pac+'</td><td>'+x.destination+'</td><td style="text-align:right">'+x.todayUnique.toLocaleString()+'</td><td style="text-align:right" class="muted">'+x.alreadyReported.toLocaleString()+'</td><td style="text-align:right;color:#4ade80">'+x.newCount.toLocaleString()+'</td></tr>';});
+  gh+='</tbody></table>';
+  if(g.groups.length===0)gh='<p class="muted">No mapped groups in this pull.</p>';
+  $('#rl-groups').innerHTML=gh;$('#rl-groups-card').classList.remove('hide');
+  // quarantine
+  if(g.quarantined.length){
+    let qh='<table><thead><tr><th>Project</th><th style="text-align:right">Opt-outs held</th></tr></thead><tbody>';
+    g.quarantined.forEach(x=>{qh+='<tr><td>'+x.project+'</td><td style="text-align:right;color:var(--accent)">'+x.count.toLocaleString()+'</td></tr>';});
+    qh+='</tbody></table>';
+    $('#rl-quar').innerHTML=qh;$('#rl-quar-card').classList.remove('hide');
+  }
+  // all projects
+  let ph='<table><thead><tr><th>Project</th><th>PAC</th><th>Destination</th><th style="text-align:right">Opt-outs</th><th>Status</th></tr></thead><tbody>';
+  g.projects.forEach(x=>{var badge=x.status==='mapped'?'<span style="color:#4ade80">mapped</span>':'<span style="color:var(--accent)">unmapped</span>';ph+='<tr><td>'+x.project+'</td><td>'+(x.pac||'<span class="muted">-</span>')+'</td><td>'+(x.destination||'<span class="muted">-</span>')+'</td><td style="text-align:right">'+x.count.toLocaleString()+'</td><td>'+badge+'</td></tr>';});
+  ph+='</tbody></table>';
+  $('#rl-proj').innerHTML=ph;$('#rl-proj-card').classList.remove('hide');
+}
 // uploaded lists (Google Drive, read-only)
 async function loadUploaded(){
   const tree=$('#u-tree');

@@ -7,6 +7,8 @@ import { scrubContacts, buildOptOutSet, normalizeOptOutCsv } from './scrub';
 import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv } from './parsefile';
 import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
+import { pullOptOuts, MAGA_CLIENT } from './rgop';
+import { buildRunLog } from './runlogs';
 import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
@@ -366,6 +368,24 @@ api.post('/push', async (c) => {
     }, 200);
   } catch (e) {
     return c.json({ ok: false, wrote: false, error: String(e) }, 502);
+  }
+});
+
+// RUN LOGS (dry-run): pull opt-outs from ReadyGOP, parse (pac, destination),
+// read back existing opt-outs from S3 (READ ONLY), and report what WOULD be
+// new. Writes NOTHING to S3 or anywhere. This is the read-only funnel view.
+api.get('/runlogs/dry-run', async (c) => {
+  const maxRows = Math.min(Number(c.req.query('max') || '2000') || 2000, 40000);
+  try {
+    const { rows, totalCount } = await pullOptOuts(c.env, MAGA_CLIENT.id, { maxRows });
+    const log = await buildRunLog(c.env, rows, {
+      client: MAGA_CLIENT.name,
+      source: 'readygop-live',
+      totalCount,
+    });
+    return c.json({ ok: true, dryRun: true, wrote: false, log });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
   }
 });
 

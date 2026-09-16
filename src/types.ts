@@ -20,6 +20,9 @@ export interface Env {
   SESSION_SECRET: string;
   GOOGLE_SA_KEY: string; // service account JSON (for Drive writes)
 
+  // Secret - ReadyGOP proxy (full URL incl. ?api_key=...). READ ONLY pulls.
+  RGOP_PROXY_URL: string;
+
   // Secrets - S3 sync targets (JSON-encoded BucketCreds each)
   // Source we PULL vendor opt-outs from:
   S3_SOURCE_P2P: string;

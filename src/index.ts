@@ -9,6 +9,7 @@ import { fileToCsv } from './parsefile';
 import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
 import { pullOptOuts, MAGA_CLIENT } from './rgop';
 import { buildRunLog } from './runlogs';
+import { loadOverrides, setOverride, PAC_SLUGS, DESTINATIONS } from './mapping';
 import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
@@ -386,6 +387,38 @@ api.get('/runlogs/dry-run', async (c) => {
     return c.json({ ok: true, dryRun: true, wrote: false, log });
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// MAPPING: read current human-assigned project overrides + the canonical
+// PAC/destination option lists the UI offers. Read-only.
+api.get('/mapping', async (c) => {
+  try {
+    const overrides = await loadOverrides(c.env);
+    return c.json({ ok: true, overrides, pacSlugs: PAC_SLUGS, destinations: DESTINATIONS });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// MAPPING: assign (or clear) a project's (pac, destination). Persists to KV so
+// it survives across sessions. Does NOT touch S3. Send empty pac+dest to clear.
+api.post('/mapping', async (c) => {
+  let body: { project?: string; pac?: string; destination?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: 'invalid JSON body' }, 400);
+  }
+  const project = String(body.project || '').trim();
+  if (!project) return c.json({ ok: false, error: 'missing project' }, 400);
+  const pac = body.pac ? String(body.pac) : null;
+  const destination = body.destination ? String(body.destination) : null;
+  try {
+    const overrides = await setOverride(c.env, project, pac, destination);
+    return c.json({ ok: true, project, pac, destination, overrides });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 400);
   }
 });
 

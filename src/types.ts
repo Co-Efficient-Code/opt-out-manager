@@ -32,6 +32,8 @@ export interface Env {
 
   // Optional bindings
   SESSIONS?: KVNamespace;
+  // Project -> (pac, destination) mapping overrides (human-assigned).
+  OPTOUT_MAPPING?: KVNamespace;
 }
 
 export interface SessionUser {

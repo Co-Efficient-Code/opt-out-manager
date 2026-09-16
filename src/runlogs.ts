@@ -2,6 +2,7 @@ import type { Env } from './types';
 import type { SyncRole } from './s3';
 import { listObjects, getObject } from './s3';
 import type { RgopOptOut } from './rgop';
+import { loadOverrides, cleanName, type OverrideMap } from './mapping';
 
 /**
  * Run-log dry-run: pull opt-outs from ReadyGOP, parse each project into a
@@ -111,6 +112,7 @@ export interface ProjectRow {
   destination: string | null;
   count: number;
   status: 'mapped' | 'unmapped';
+  source: 'parser' | 'override';
 }
 export interface RunLog {
   ranAt: string;
@@ -132,19 +134,26 @@ export async function buildRunLog(
   rows: RgopOptOut[],
   meta: { client: string; source: string; totalCount: number },
 ): Promise<RunLog> {
+  const overrides: OverrideMap = await loadOverrides(env);
   const groups = new Map<string, Set<string>>(); // "pac|dest" -> phones
   const quarantine = new Map<string, number>();
   const perProject = new Map<string, ProjectRow>();
 
   for (const r of rows) {
-    const clean = (r.project || '').split('\t').pop() || '(unknown)';
-    const { pac, destination } = parseProject(r.project);
+    const clean = cleanName(r.project) || '(unknown)';
+    const parsed = parseProject(r.project);
+    // Human override wins over the parser (per-field).
+    const ov = overrides[clean];
+    const pac = ov?.pac ?? parsed.pac;
+    const destination = ov?.destination ?? parsed.destination;
+    const usedOverride = !!ov && (ov.pac != null || ov.destination != null);
     const rec = perProject.get(clean) || {
       project: clean,
       pac,
       destination,
       count: 0,
       status: (pac && destination ? 'mapped' : 'unmapped') as 'mapped' | 'unmapped',
+      source: (usedOverride ? 'override' : 'parser') as 'parser' | 'override',
     };
     rec.count += 1;
     perProject.set(clean, rec);

@@ -19,6 +19,13 @@ routes = [
   { pattern = "staging.optouts.coefficient.org", custom_domain = true }
 ]
 
+# Project -> (pac, destination) mapping overrides (human-assigned). Survives
+# across sessions/runs. Scrubbing/opt-out reads still come from S3 (read-only);
+# this KV only holds user-assigned project mappings.
+[[env.staging.kv_namespaces]]
+binding = "OPTOUT_MAPPING"
+id = "c5678d4a97bd41f9b15feedabe68926c"
+
 [env.staging.vars]
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
 S3_REGION = "us-east-1"

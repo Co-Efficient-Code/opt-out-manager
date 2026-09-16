@@ -525,7 +525,37 @@ async function loadBrowse(){
   }
 }
 $('#b-bucket').addEventListener('change',loadBrowse);
-// run logs (dry-run, read-only)
+// run logs (dry-run, read-only) + project mapping (persisted to KV)
+let rlPacs=[],rlDests=[];
+function assignCell(project){
+  var pid=project.replace(/[^a-z0-9]/gi,'_');
+  var pacOpts='<option value="">PAC...</option>'+rlPacs.map(function(p){return '<option value="'+p+'">'+p+'</option>';}).join('');
+  var destOpts='<option value="">Destination...</option>'+rlDests.map(function(dv){return '<option value="'+dv+'">'+dv+'</option>';}).join('');
+  return '<span class="assign" data-project="'+encodeURIComponent(project)+'">'+
+    '<select class="asg-pac" style="width:auto;display:inline-block;margin-right:6px">'+pacOpts+'</select>'+
+    '<select class="asg-dest" style="width:auto;display:inline-block;margin-right:6px">'+destOpts+'</select>'+
+    '<button class="btn asg-save" style="padding:6px 12px">Save</button>'+
+    '<span class="asg-msg muted" style="margin-left:8px"></span></span>';
+}
+function wireAssigns(root){
+  root.querySelectorAll('.asg-save').forEach(function(btn){
+    btn.onclick=async function(){
+      var box=btn.closest('.assign');
+      var project=decodeURIComponent(box.dataset.project);
+      var pac=box.querySelector('.asg-pac').value;
+      var dest=box.querySelector('.asg-dest').value;
+      var msg=box.querySelector('.asg-msg');
+      if(!pac||!dest){msg.textContent='Pick both PAC and Destination.';return;}
+      btn.disabled=true;msg.innerHTML='<span class="spin"></span>Saving...';
+      try{
+        var d=await jsonFetch('/api/mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({project:project,pac:pac,destination:dest})});
+        if(!d.ok){msg.textContent='Failed: '+(d.error||'error');btn.disabled=false;return;}
+        msg.textContent='Saved. Re-running...';
+        loadRunlogs();
+      }catch(e){msg.textContent='Failed: '+e.message;btn.disabled=false;}
+    };
+  });
+}
 $('#rl-run').onclick=loadRunlogs;
 async function loadRunlogs(){
   const btn=$('#rl-run');const st=$('#rl-status');
@@ -538,6 +568,8 @@ async function loadRunlogs(){
   if(!d.ok||d.error){st.textContent='Failed: '+(d.error||'unknown error');return;}
   st.textContent='';
   const g=d.log;
+  // load canonical option lists for assign dropdowns (once)
+  try{var m=await jsonFetch('/api/mapping');rlPacs=m.pacSlugs||[];rlDests=m.destinations||[];}catch(e){}
   const newTotal=g.groups.reduce((s,x)=>s+x.newCount,0);
   const quarTotal=g.quarantined.reduce((s,x)=>s+x.count,0);
   $('#rl-meta').innerHTML='<span>Client: <b>'+g.client+'</b></span><span>Ran: <b>'+fmtDate(g.ranAt)+'</b></span><span>Client total opt-outs: <b>'+g.totalCount.toLocaleString()+'</b></span><span>Pulled this run: <b>'+g.inputOptOuts.toLocaleString()+'</b></span>';
@@ -555,16 +587,18 @@ async function loadRunlogs(){
   $('#rl-groups').innerHTML=gh;$('#rl-groups-card').classList.remove('hide');
   // quarantine
   if(g.quarantined.length){
-    let qh='<table><thead><tr><th>Project</th><th style="text-align:right">Opt-outs held</th></tr></thead><tbody>';
-    g.quarantined.forEach(x=>{qh+='<tr><td>'+x.project+'</td><td style="text-align:right;color:var(--accent)">'+x.count.toLocaleString()+'</td></tr>';});
+    let qh='<table><thead><tr><th>Project</th><th style="text-align:right">Opt-outs held</th><th>Assign PAC + Destination</th></tr></thead><tbody>';
+    g.quarantined.forEach(x=>{qh+='<tr><td>'+x.project+'</td><td style="text-align:right;color:var(--accent)">'+x.count.toLocaleString()+'</td><td>'+assignCell(x.project)+'</td></tr>';});
     qh+='</tbody></table>';
     $('#rl-quar').innerHTML=qh;$('#rl-quar-card').classList.remove('hide');
+    wireAssigns($('#rl-quar'));
   }
   // all projects
   let ph='<table><thead><tr><th>Project</th><th>PAC</th><th>Destination</th><th style="text-align:right">Opt-outs</th><th>Status</th></tr></thead><tbody>';
-  g.projects.forEach(x=>{var badge=x.status==='mapped'?'<span style="color:#4ade80">mapped</span>':'<span style="color:var(--accent)">unmapped</span>';ph+='<tr><td>'+x.project+'</td><td>'+(x.pac||'<span class="muted">-</span>')+'</td><td>'+(x.destination||'<span class="muted">-</span>')+'</td><td style="text-align:right">'+x.count.toLocaleString()+'</td><td>'+badge+'</td></tr>';});
+  g.projects.forEach(x=>{var badge=x.status==='mapped'?('<span style="color:#4ade80">mapped'+(x.source==='override'?' (assigned)':'')+'</span>'):'<span style="color:var(--accent)">unmapped</span>';var last=x.status==='mapped'?badge:assignCell(x.project);ph+='<tr><td>'+x.project+'</td><td>'+(x.pac||'<span class="muted">-</span>')+'</td><td>'+(x.destination||'<span class="muted">-</span>')+'</td><td style="text-align:right">'+x.count.toLocaleString()+'</td><td>'+last+'</td></tr>';});
   ph+='</tbody></table>';
   $('#rl-proj').innerHTML=ph;$('#rl-proj-card').classList.remove('hide');
+  wireAssigns($('#rl-proj'));
 }
 // uploaded lists (Google Drive, read-only)
 async function loadUploaded(){

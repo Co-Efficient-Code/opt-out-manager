@@ -67,19 +67,19 @@ th{color:var(--muted);font-weight:600}
 .btable th.c-size,.btable th.c-rec{text-align:right}
 .ptable{table-layout:fixed;width:100%}
 .ptable th,.ptable td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ptable .c-proj{width:42%}
+.ptable .c-proj{width:44%}
 .ptable .c-pac{width:16%}
-.ptable .c-dest{width:13%}
-.ptable .c-newtot{width:16%;text-align:right}
-.ptable th.c-newtot{text-align:right}
+.ptable .c-dest{width:14%}
+.ptable .c-new{width:9%;text-align:right}
+.ptable .c-tot{width:9%;text-align:right}
+.ptable th.c-new,.ptable th.c-tot{text-align:right}
 .ptable .c-stat{width:6%;text-align:center;overflow:visible}
 .ptable th.c-stat{text-align:center}
 .ic{display:inline-flex;vertical-align:middle}
 .ic svg{width:17px;height:17px}
 .ic-ok{color:#4ade80}.ic-block{color:#f87171}
-.newtot .nt-new{color:#4ade80;font-weight:600}
-.newtot .nt-sep{color:var(--subtle);margin:0 3px}
-.newtot .nt-tot{color:var(--muted)}
+.ptable .c-new .nt-new{color:#4ade80;font-weight:600}
+.ptable .c-tot{color:var(--muted)}
 </style></head>
 <body>
 <div class="top">
@@ -636,16 +636,14 @@ async function loadRunlogs(){
   var icOk='<span class="ic ic-ok" title="Mapped"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
   var icBlock='<span class="ic ic-block" title="Unmapped"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>';
   var dash='<span class="muted">-</span>';
-  let ph='<table class="ptable"><thead><tr><th class="c-stat">&nbsp;</th><th class="c-proj">Project</th><th class="c-pac">PAC</th><th class="c-dest">Destination</th><th class="c-newtot">New / Total</th></tr></thead><tbody>';
+  let ph='<table class="ptable"><thead><tr><th class="c-stat">&nbsp;</th><th class="c-proj">Project</th><th class="c-pac">PAC</th><th class="c-dest">Destination</th><th class="c-new">New</th><th class="c-tot">Total</th></tr></thead><tbody>';
   g.projects.forEach(x=>{
     var mapped=x.status==='mapped';
     var icon=mapped?icOk:icBlock;
     var ttl=x.count.toLocaleString();
-    var newtot=(mapped&&x.newCount!=null)
-      ?'<span class="nt-new">'+x.newCount.toLocaleString()+'</span><span class="nt-sep">/</span><span class="nt-tot">'+ttl+'</span>'
-      :'<span class="nt-tot">'+ttl+'</span>';
+    var newCell=(mapped&&x.newCount!=null)?'<span class="nt-new">'+x.newCount.toLocaleString()+'</span>':dash;
     var title=mapped?('Mapped'+(x.source==='override'?' (assigned)':'')):'Unmapped';
-    ph+='<tr><td class="c-stat" title="'+title+'">'+icon+'</td><td class="c-proj" title="'+x.project.replace(/"/g,'&quot;')+'">'+x.project+'</td><td class="c-pac">'+(x.pac||dash)+'</td><td class="c-dest">'+(x.destination||dash)+'</td><td class="c-newtot newtot">'+newtot+'</td></tr>';
+    ph+='<tr><td class="c-stat" title="'+title+'">'+icon+'</td><td class="c-proj" title="'+x.project.replace(/"/g,'&quot;')+'">'+x.project+'</td><td class="c-pac">'+(x.pac||dash)+'</td><td class="c-dest">'+(x.destination||dash)+'</td><td class="c-new">'+newCell+'</td><td class="c-tot">'+ttl+'</td></tr>';
   });
   ph+='</tbody></table>';
   $('#rl-proj').innerHTML=ph;$('#rl-proj-card').classList.remove('hide');

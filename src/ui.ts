@@ -67,12 +67,19 @@ th{color:var(--muted);font-weight:600}
 .btable th.c-size,.btable th.c-rec{text-align:right}
 .ptable{table-layout:fixed;width:100%}
 .ptable th,.ptable td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ptable .c-proj{width:48%}
+.ptable .c-proj{width:42%}
 .ptable .c-pac{width:16%}
-.ptable .c-dest{width:16%}
-.ptable .c-num{width:9%;text-align:right}
-.ptable th.c-num{text-align:right}
-.ptable .c-stat{width:11%}
+.ptable .c-dest{width:13%}
+.ptable .c-newtot{width:16%;text-align:right}
+.ptable th.c-newtot{text-align:right}
+.ptable .c-stat{width:6%;text-align:center;overflow:visible}
+.ptable th.c-stat{text-align:center}
+.ic{display:inline-flex;vertical-align:middle}
+.ic svg{width:17px;height:17px}
+.ic-ok{color:#4ade80}.ic-block{color:#f87171}
+.newtot .nt-new{color:#4ade80;font-weight:600}
+.newtot .nt-sep{color:var(--subtle);margin:0 3px}
+.newtot .nt-tot{color:var(--muted)}
 </style></head>
 <body>
 <div class="top">
@@ -220,6 +227,32 @@ th{color:var(--muted);font-weight:600}
       </ul>
 
       <div class="note" style="margin-top:20px">Uploads are local-preview only right now. Nothing is written to any S3 bucket. Writes remain disabled to protect client data.</div>
+    </div>
+
+    <div class="card">
+      <h2>How we read opt-outs from ReadyGOP</h2>
+      <p class="sub">ReadyGOP is the texting platform that holds the live opt-outs. We read them through an internal proxy; the app never talks to ReadyGOP directly and never writes to it.</p>
+      <h3 style="font-size:15px;margin:18px 0 6px">Endpoint and method</h3>
+      <div class="stat" style="font-family:monospace;font-size:13px">POST https://tools.coefficient.org/api/rgop-proxy</div>
+      <ul style="color:var(--muted);font-size:14px;line-height:1.6;margin:8px 0 0;padding-left:20px">
+        <li><b style="color:var(--text)">Method:</b> HTTP <b style="color:var(--text)">POST</b>, body is a GraphQL query (Content-Type application/json).</li>
+        <li><b style="color:var(--text)">Proxy:</b> a pass-through to ReadyGOP's GraphQL API (api.readygop.com/graphql). The proxy injects the auth token, so the key stays server-side.</li>
+        <li><b style="color:var(--text)">Query:</b> root <code>optOuts(first, after, filters)</code> with a <code>clientId EQUAL</code> filter, paged by cursor, newest first. (We avoid <code>client(id).optOuts</code> which is unpaginated and times out.)</li>
+        <li><b style="color:var(--text)">Each record returns:</b> phone number, project (number + name), opt-out type, and timestamp. The phone number is the key we scrub on.</li>
+        <li><b style="color:var(--text)">Read only:</b> we only ever pull. Opt-outs are never written back to ReadyGOP.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>How scrubbing works</h2>
+      <p class="sub">Scrubbing removes people who already opted out from a contact list, before a send.</p>
+      <ol style="color:var(--muted);font-size:14px;line-height:1.7;margin:8px 0 0;padding-left:20px">
+        <li>You pick a <b style="color:var(--text)">PAC</b> and drop in a <b style="color:var(--text)">contact list</b> (CSV or Excel).</li>
+        <li>We build that PAC's <b style="color:var(--text)">opt-out set</b> by reading its opt-out files from S3 (read-only) and normalizing every phone to 10 digits.</li>
+        <li>We walk your list and <b style="color:var(--text)">drop any row whose phone is in the opt-out set</b>. Everyone else is kept.</li>
+        <li>You get back a <b style="color:var(--text)">cleaned list</b> plus a count of how many were scrubbed, and a copy is saved to the destination's Drive folder.</li>
+      </ol>
+      <p class="muted" style="font-size:13px;margin-top:10px">In short: contact list in, opt-outs subtracted, clean list out. The opt-out source is always read-only, so scrubbing can never change client data.</p>
     </div>
   </div>
 
@@ -600,8 +633,20 @@ async function loadRunlogs(){
     wireAssigns($('#rl-quar'));
   }
   // all projects
-  let ph='<table class="ptable"><thead><tr><th class="c-proj">Project</th><th class="c-pac">PAC</th><th class="c-dest">Destination</th><th class="c-num">Opt-outs</th><th class="c-stat">Status</th></tr></thead><tbody>';
-  g.projects.forEach(x=>{var badge=x.status==='mapped'?('<span style="color:#4ade80">mapped'+(x.source==='override'?' (assigned)':'')+'</span>'):'<span style="color:var(--accent)">unmapped</span>';ph+='<tr><td class="c-proj">'+x.project+'</td><td class="c-pac">'+(x.pac||'<span class="muted">-</span>')+'</td><td class="c-dest">'+(x.destination||'<span class="muted">-</span>')+'</td><td class="c-num">'+x.count.toLocaleString()+'</td><td class="c-stat">'+badge+'</td></tr>';});
+  var icOk='<span class="ic ic-ok" title="Mapped"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
+  var icBlock='<span class="ic ic-block" title="Unmapped"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>';
+  var dash='<span class="muted">-</span>';
+  let ph='<table class="ptable"><thead><tr><th class="c-proj">Project</th><th class="c-pac">PAC</th><th class="c-dest">Destination</th><th class="c-newtot">New / Total</th><th class="c-stat">&nbsp;</th></tr></thead><tbody>';
+  g.projects.forEach(x=>{
+    var mapped=x.status==='mapped';
+    var icon=mapped?icOk:icBlock;
+    var ttl=x.count.toLocaleString();
+    var newtot=(mapped&&x.newCount!=null)
+      ?'<span class="nt-new">'+x.newCount.toLocaleString()+'</span><span class="nt-sep">/</span><span class="nt-tot">'+ttl+'</span>'
+      :'<span class="nt-tot">'+ttl+'</span>';
+    var title=mapped?('Mapped'+(x.source==='override'?' (assigned)':'')):'Unmapped';
+    ph+='<tr><td class="c-proj" title="'+x.project.replace(/"/g,'&quot;')+'">'+x.project+'</td><td class="c-pac">'+(x.pac||dash)+'</td><td class="c-dest">'+(x.destination||dash)+'</td><td class="c-newtot newtot">'+newtot+'</td><td class="c-stat" title="'+title+'">'+icon+'</td></tr>';
+  });
   ph+='</tbody></table>';
   $('#rl-proj').innerHTML=ph;$('#rl-proj-card').classList.remove('hide');
 }

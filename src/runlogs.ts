@@ -110,7 +110,8 @@ export interface ProjectRow {
   project: string;
   pac: string | null;
   destination: string | null;
-  count: number;
+  count: number; // total opt-outs pulled for this project
+  newCount: number | null; // new vs already-reported (null when unmapped/quarantined)
   status: 'mapped' | 'unmapped';
   source: 'parser' | 'override';
 }
@@ -136,6 +137,7 @@ export async function buildRunLog(
 ): Promise<RunLog> {
   const overrides: OverrideMap = await loadOverrides(env);
   const groups = new Map<string, Set<string>>(); // "pac|dest" -> phones
+  const projectPhones = new Map<string, Set<string>>(); // project -> phones
   const quarantine = new Map<string, number>();
   const perProject = new Map<string, ProjectRow>();
 
@@ -152,6 +154,7 @@ export async function buildRunLog(
       pac,
       destination,
       count: 0,
+      newCount: null,
       status: (pac && destination ? 'mapped' : 'unmapped') as 'mapped' | 'unmapped',
       source: (usedOverride ? 'override' : 'parser') as 'parser' | 'override',
     };
@@ -166,13 +169,17 @@ export async function buildRunLog(
     if (p) {
       const gk = `${pac}|${destination}`;
       (groups.get(gk) || groups.set(gk, new Set()).get(gk)!).add(p);
+      (projectPhones.get(clean) || projectPhones.set(clean, new Set()).get(clean)!).add(p);
     }
   }
 
+  // Read-back existing phones once per (pac, destination) folder (READ ONLY).
+  const existingByKey = new Map<string, Set<string>>();
   const groupOut: RunGroup[] = [];
   for (const [gk, phones] of [...groups.entries()].sort()) {
     const [pac, destination] = gk.split('|');
     const existing = await readExistingPhones(env, destination, pac);
+    existingByKey.set(gk, existing);
     let already = 0;
     for (const p of phones) if (existing.has(p)) already += 1;
     groupOut.push({
@@ -182,6 +189,17 @@ export async function buildRunLog(
       alreadyReported: already,
       newCount: phones.size - already,
     });
+  }
+
+  // Per-project new count against that project's (pac, destination) folder.
+  for (const [project, phones] of projectPhones.entries()) {
+    const rec = perProject.get(project);
+    if (!rec || !rec.pac || !rec.destination) continue;
+    const existing = existingByKey.get(`${rec.pac}|${rec.destination}`);
+    if (!existing) continue;
+    let n = 0;
+    for (const p of phones) if (!existing.has(p)) n += 1;
+    rec.newCount = n;
   }
 
   return {

@@ -122,7 +122,6 @@ th{color:var(--muted);font-weight:600}
   <div id="scrub">
     <div class="card">
       <h2>Scrub a contact list</h2>
-      <p class="sub">Remove existing opt-outs from a list before you send. Reads opt-outs for the selected PAC. On download, the cleaned list is also saved to the destination's Google Drive folder. See the Documentation tab for file standards.</p>
       <label>Account (PAC)</label>
       <select id="s-org"><option value="">Loading accounts...</option></select>
       <label>Destination</label>
@@ -170,7 +169,6 @@ th{color:var(--muted);font-weight:600}
   <div id="runlogs" class="hide">
     <div class="card">
       <h2>Opt-out run logs <span class="badge">dry run</span></h2>
-      <p class="sub">Live pull from ReadyGOP for MAGA, Inc. Each opt-out is parsed into a (PAC, Destination) pair, then checked against existing opt-outs already in the S3 folder to see what would be new. This view is READ ONLY. Nothing is written to any bucket.</p>
       <div class="row">
         <button class="btn" id="rl-run">Run full pull</button>
         <button class="btn ghost" id="rl-preview">Preview output files</button>

@@ -5,9 +5,8 @@ import type { SessionUser } from './types';
 
 const LOGO = 'https://app.coefficient.org/white-coefficient-logo.png';
 
-export function renderApp(user: SessionUser, appEnv: string): string {
-  const envBadge = appEnv && appEnv !== 'production'
-    ? `<span class="badge">${appEnv}</span>` : '';
+export function renderApp(user: SessionUser, _appEnv: string): string {
+  const envBadge = '';
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -99,20 +98,24 @@ th{color:var(--muted);font-weight:600}
   .who-email{display:none}
   .top{padding:12px 16px}
   .wrap{margin:18px auto;padding:0 12px}
-  .card{padding:16px}
-  /* Tabs: wrap onto multiple rows, taller, smaller font, fully readable. */
-  .tabs{flex-wrap:wrap;gap:6px}
-  .tab{flex:1 1 40%;min-width:0;white-space:normal;overflow:visible;text-overflow:clip;font-size:12px;padding:12px 8px;line-height:1.2}
-  /* Tables: allow horizontal scroll inside the card instead of overflowing. */
-  .card{overflow-x:hidden}
-  table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:normal}
-  /* Let fixed-layout tables shrink and wrap date/text cells on small screens. */
-  .btable,.ptable,.qtable{table-layout:auto;width:100%}
-  .btable .c-date,.ptable .c-proj,.htable .h-when{white-space:normal;word-break:break-word}
+  .card{padding:16px;overflow:hidden}
+  /* Tabs: single-row horizontal scroll strip. Each tab keeps its label on one
+     line at natural size; swipe left/right through them. */
+  .tabs{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;gap:8px;padding-bottom:4px;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{flex:0 0 auto;white-space:nowrap;overflow:visible;text-overflow:clip;font-size:13px;padding:11px 16px}
+  /* Tables: horizontal scroll at natural width inside the card, so columns are
+     never crushed (the "When" column stays readable on one line). */
+  .card>table,.card>div>table,#rl-hist table,#b-tree table,#u-tree table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table th,table td{white-space:nowrap}
+  /* keep Triggered by wrapping even on mobile so it stays a narrow column */
+  .htable .h-by{white-space:normal;word-break:break-word;min-width:90px}
   .stats{grid-template-columns:repeat(2,1fr)}
 }
-.htable .h-when{width:26%}
-.htable .h-by{width:20%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Triggered by: narrow column; long values like "Chopper (automated)" wrap to a
+   second line instead of forcing the column wide. */
+.htable .h-when{width:22%;white-space:nowrap}
+.htable .h-by{width:14%;white-space:normal;word-break:break-word}
 .htable .h-num{text-align:right;width:13%}
 .htable th.h-num{text-align:right}
 .htable .h-email{width:15%;text-align:center}
@@ -187,9 +190,9 @@ th{color:var(--muted);font-weight:600}
   <!-- RUN LOGS (dry-run, read-only) -->
   <div id="runlogs" class="hide">
     <div class="card">
-      <h2>Opt-out run logs <span class="badge">dry run</span></h2>
+      <h2>Opt-out run logs</h2>
       <div class="row">
-        <button class="btn" id="rl-run">Run full pull</button>
+        <button class="btn" id="rl-run">Refresh Optouts</button>
         <span id="rl-status" class="muted"></span>
       </div>
       <div id="rl-progress" class="rl-progress hide"></div>
@@ -212,7 +215,7 @@ th{color:var(--muted);font-weight:600}
     </div>
     <div class="card" id="rl-hist-card">
       <h2>Run history</h2>
-      <div id="rl-hist"><span class="muted">No runs yet. Hit Run full pull.</span></div>
+      <div id="rl-hist"><span class="muted">No runs yet. Hit Refresh Optouts.</span></div>
     </div>
   </div>
 
@@ -267,7 +270,6 @@ th{color:var(--muted);font-weight:600}
         <li>A write guard (HEAD / If-None-Match) will block any accidental overwrite at the API level once writes are enabled.</li>
       </ul>
 
-      <div class="note" style="margin-top:20px">Uploads are local-preview only right now. Nothing is written to any S3 bucket. Writes remain disabled to protect client data.</div>
     </div>
 
     <div class="card">
@@ -641,7 +643,7 @@ function wireAssigns(root){
 $('#rl-run').onclick=loadRunlogs;
 async function loadRunlogs(){
   const btn=$('#rl-run');const st=$('#rl-status');const prog=$('#rl-progress');
-  btn.disabled=true;st.innerHTML='<span class="spin"></span>Starting full pull...';
+  btn.disabled=true;st.innerHTML='<span class="spin"></span>Refreshing optouts...';
   prog.classList.remove('hide');prog.innerHTML='';
   ['#rl-summary','#rl-groups-card','#rl-quar-card','#rl-proj-card'].forEach(id=>$(id).classList.add('hide'));
   // Stream NDJSON progress from the full pull so the user can watch it work.
@@ -731,7 +733,7 @@ async function loadRunHistory(){
   const el=$('#rl-hist');if(!el)return;
   let d;try{d=await jsonFetch('/api/runlogs/history');}catch(e){el.innerHTML='<span class="muted">Could not load history: '+e.message+'</span>';return;}
   const runs=(d&&d.runs)||[];
-  if(!runs.length){el.innerHTML='<span class="muted">No runs yet. Hit Run full pull.</span>';return;}
+  if(!runs.length){el.innerHTML='<span class="muted">No runs yet. Hit Refresh Optouts.</span>';return;}
   var okIc='<span class="ic ic-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
   var noIc='<span class="ic ic-block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>';
   function who(r){

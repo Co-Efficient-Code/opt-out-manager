@@ -222,3 +222,79 @@ export async function buildRunLog(
     projects: [...perProject.values()].sort((a, b) => b.count - a.count),
   };
 }
+
+// Build the run-summary email (HTML + plain text) from a run log.
+// appUrl is the base URL of the app; the flagged-project link points at the
+// Run logs tab so a user can go assign the mapping.
+export function buildRunEmail(
+  log: RunLog,
+  appUrl: string,
+): { subject: string; html: string; text: string } {
+  const newTotal = log.groups.reduce((s, g) => s + g.newCount, 0);
+  const quarTotal = log.quarantined.reduce((s, q) => s + q.count, 0);
+  const runLogsUrl = appUrl.replace(/\/$/, '') + '/#runlogs';
+  const ranLocal = new Date(log.ranAt).toLocaleString('en-US', { timeZone: 'America/Chicago' });
+
+  const subject =
+    `[Opt-Out Sync] ${log.client}: ${newTotal.toLocaleString()} new` +
+    (quarTotal > 0 ? ` — ${log.quarantined.length} project(s) need mapping` : '');
+
+  // --- plain text ---
+  const t: string[] = [];
+  t.push(`Opt-Out Sync run — ${log.client}`);
+  t.push(`Ran: ${ranLocal} CT`);
+  t.push('');
+  t.push(`DRY RUN — nothing was written to S3.`);
+  t.push('');
+  t.push(`New opt-outs (would be uploaded): ${newTotal.toLocaleString()}`);
+  t.push(`Pulled this run: ${log.inputOptOuts.toLocaleString()} of ${log.totalCount.toLocaleString()} total`);
+  t.push('');
+  if (log.groups.length) {
+    t.push('By PAC / Destination:');
+    for (const g of log.groups) {
+      t.push(`  ${g.pac} / ${g.destination}: ${g.newCount.toLocaleString()} new (${g.alreadyReported.toLocaleString()} already reported)`);
+    }
+    t.push('');
+  }
+  if (log.quarantined.length) {
+    t.push(`ACTION NEEDED — ${log.quarantined.length} project(s) not mapped, ${quarTotal.toLocaleString()} opt-outs held:`);
+    for (const q of log.quarantined) {
+      t.push(`  ${q.project} (${q.count.toLocaleString()})`);
+    }
+    t.push('');
+    t.push(`Assign these here: ${runLogsUrl}`);
+  } else {
+    t.push('All projects mapped. No action needed.');
+  }
+
+  // --- html ---
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const h: string[] = [];
+  h.push(`<div style="font-family:Arial,Helvetica,sans-serif;color:#0a1628;max-width:640px">`);
+  h.push(`<h2 style="margin:0 0 4px">Opt-Out Sync run — ${esc(log.client)}</h2>`);
+  h.push(`<p style="color:#64748b;margin:0 0 14px;font-size:13px">${esc(ranLocal)} CT &middot; <b>DRY RUN</b> — nothing written to S3</p>`);
+  h.push(`<div style="font-size:15px;margin:0 0 16px"><b style="color:#16a34a">${newTotal.toLocaleString()}</b> new opt-outs &nbsp;|&nbsp; ${log.inputOptOuts.toLocaleString()} pulled of ${log.totalCount.toLocaleString()} total</div>`);
+  if (log.groups.length) {
+    h.push(`<table style="border-collapse:collapse;width:100%;font-size:13px;margin:0 0 18px"><thead><tr>`);
+    h.push(`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">PAC</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Destination</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">New</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">Already reported</th></tr></thead><tbody>`);
+    for (const g of log.groups) {
+      h.push(`<tr><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(g.pac)}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(g.destination)}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#16a34a;font-weight:600">${g.newCount.toLocaleString()}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#64748b">${g.alreadyReported.toLocaleString()}</td></tr>`);
+    }
+    h.push(`</tbody></table>`);
+  }
+  if (log.quarantined.length) {
+    h.push(`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 16px;margin:0 0 8px">`);
+    h.push(`<div style="font-weight:700;color:#b91c1c;margin:0 0 8px">Action needed: ${log.quarantined.length} project(s) need mapping</div>`);
+    h.push(`<div style="font-size:13px;color:#7f1d1d;margin:0 0 10px">${quarTotal.toLocaleString()} opt-outs are held and will NOT be uploaded until each project is assigned a PAC + Destination.</div>`);
+    h.push(`<ul style="margin:0 0 12px;padding-left:18px;font-size:13px;color:#7f1d1d">`);
+    for (const q of log.quarantined) h.push(`<li>${esc(q.project)} <span style="color:#b91c1c">(${q.count.toLocaleString()})</span></li>`);
+    h.push(`</ul>`);
+    h.push(`<a href="${esc(runLogsUrl)}" style="display:inline-block;background:#E27124;color:#fff;text-decoration:none;padding:9px 16px;border-radius:6px;font-weight:600;font-size:13px">Assign mappings in Run logs</a>`);
+    h.push(`</div>`);
+  } else {
+    h.push(`<div style="color:#16a34a;font-weight:600;font-size:13px">All projects mapped. No action needed.</div>`);
+  }
+  h.push(`</div>`);
+
+  return { subject, html: h.join('\n'), text: t.join('\n') };
+}

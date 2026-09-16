@@ -8,8 +8,9 @@ import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv } from './parsefile';
 import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
 import { pullOptOuts, MAGA_CLIENT } from './rgop';
-import { buildRunLog } from './runlogs';
+import { buildRunLog, buildRunEmail } from './runlogs';
 import { loadOverrides, setOverride, PAC_SLUGS, DESTINATIONS } from './mapping';
+import { sendEmail } from './email';
 import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
@@ -404,7 +405,29 @@ api.get('/runlogs/dry-run', async (c) => {
           { client: MAGA_CLIENT.name, source: 'readygop-live', totalCount },
           (msg) => send({ type: 'progress', phase: 'readback', message: msg }),
         );
-        send({ type: 'done', ok: true, dryRun: true, wrote: false, log });
+        // Send the run-summary email (chopper -> jacob). Still a DRY RUN: no S3
+        // writes. An email failure must never fail the run, so it is caught and
+        // reported as a progress line rather than thrown.
+        let emailStatus: { sent: boolean; error?: string } = { sent: false };
+        try {
+          send({ type: 'progress', phase: 'email', message: 'Sending summary email...' });
+          const appUrl = new URL(c.req.url).origin;
+          const mail = buildRunEmail(log, appUrl);
+          await sendEmail(c.env, {
+            fromEmail: 'chopper@coefficient.org',
+            fromName: 'Chopper (Opt-Out Sync)',
+            to: ['jacob@coefficient.org'],
+            subject: mail.subject,
+            html: mail.html,
+            text: mail.text,
+          });
+          emailStatus.sent = true;
+          send({ type: 'progress', phase: 'email', message: 'Summary email sent to jacob@coefficient.org' });
+        } catch (e) {
+          emailStatus = { sent: false, error: e instanceof Error ? e.message : String(e) };
+          send({ type: 'progress', phase: 'email', message: `Email failed (run still OK): ${emailStatus.error}` });
+        }
+        send({ type: 'done', ok: true, dryRun: true, wrote: false, log, email: emailStatus });
       } catch (e) {
         send({ type: 'error', ok: false, error: e instanceof Error ? e.message : String(e) });
       } finally {

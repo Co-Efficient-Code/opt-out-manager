@@ -647,7 +647,10 @@ async function loadRunlogs(){
         }else if(ev.type==='error'){
           throw new Error(ev.error||'unknown error');
         }else if(ev.type==='done'){
-          d=ev;logLine('Done.','ok');
+          d=ev;
+          if(ev.email&&ev.email.sent)logLine('Summary email sent to jacob@coefficient.org','ok');
+          else if(ev.email&&ev.email.error)logLine('Email failed (run still OK): '+ev.email.error);
+          logLine('Done.','ok');
         }
       }
     }

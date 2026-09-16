@@ -9,10 +9,12 @@ name: Opt-Out Sync Cron
 
 on:
   schedule:
-    # Twice daily, UTC. 12:00 UTC (7am CT) and 00:00 UTC (7pm CT).
-    # GitHub cron is best-effort and can lag several minutes.
-    - cron: '0 12 * * *'
-    - cron: '0 0 * * *'
+    # TEMP one-off test: 20:05 UTC (3:05pm CT) today, to verify end-to-end.
+    - cron: '5 20 * * *'
+    # Real twice-daily schedule (restore after test): 12:00 UTC (7am CT) and
+    # 00:00 UTC (7pm CT). GitHub cron is best-effort and can lag several min.
+    # - cron: '0 12 * * *'
+    # - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
       target:

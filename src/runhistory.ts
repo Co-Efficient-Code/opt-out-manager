@@ -17,6 +17,8 @@ export interface RunRecord {
   ranAt: string; // ISO timestamp
   client: string;
   source: string; // 'readygop-live' etc.
+  triggeredBy: string; // who ran it: a user email, or 'Chopper (automated)'
+  triggeredByName?: string; // display name when available
   totalCount: number; // client-wide total opt-outs
   newTotal: number; // sum of new across mapped groups
   quarantinedProjects: number; // count of unmapped projects
@@ -44,11 +46,15 @@ export function recordFromRun(
   log: RunLog,
   email: { sent: boolean; error?: string },
   wrote: boolean,
+  triggeredBy: string,
+  triggeredByName?: string,
 ): RunRecord {
   return {
     ranAt: log.ranAt,
     client: log.client,
     source: log.source,
+    triggeredBy,
+    triggeredByName,
     totalCount: log.totalCount,
     newTotal: log.groups.reduce((s, g) => s + g.newCount, 0),
     quarantinedProjects: log.quarantined.length,

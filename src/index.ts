@@ -432,7 +432,11 @@ api.get('/runlogs/dry-run', async (c) => {
         // cron) can show when each pull happened. Best-effort: never fail the
         // run over a history write.
         try {
-          await appendRunRecord(c.env, recordFromRun(log, emailStatus, false));
+          const u = c.get('user');
+          await appendRunRecord(
+            c.env,
+            recordFromRun(log, emailStatus, false, u?.email || 'unknown', u?.name),
+          );
         } catch (e) {
           send({ type: 'progress', phase: 'history', message: `Run-history save failed (run still OK): ${e instanceof Error ? e.message : String(e)}` });
         }

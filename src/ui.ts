@@ -92,10 +92,11 @@ th{color:var(--muted);font-weight:600}
 .rl-progress .rl-pline{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rl-progress .rl-pline.ok{color:#4ade80}
 .htable{width:100%}
-.htable .h-when{width:34%}
-.htable .h-num{text-align:right;width:16%}
+.htable .h-when{width:26%}
+.htable .h-by{width:20%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.htable .h-num{text-align:right;width:13%}
 .htable th.h-num{text-align:right}
-.htable .h-email{width:18%;text-align:center}
+.htable .h-email{width:15%;text-align:center}
 .htable th.h-email{text-align:center}
 .ic{display:inline-flex;vertical-align:middle}
 .ic svg{width:17px;height:17px}
@@ -194,7 +195,6 @@ th{color:var(--muted);font-weight:600}
     </div>
     <div class="card" id="rl-hist-card">
       <h2>Run history</h2>
-      <p class="sub">Every pull, with counts and whether the summary email was sent. Correlates with the emails to jacob@coefficient.org.</p>
       <div id="rl-hist"><span class="muted">No runs yet. Hit Run full pull.</span></div>
     </div>
   </div>
@@ -720,11 +720,18 @@ async function loadRunHistory(){
   if(!runs.length){el.innerHTML='<span class="muted">No runs yet. Hit Run full pull.</span>';return;}
   var okIc='<span class="ic ic-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
   var noIc='<span class="ic ic-block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>';
-  let h='<table class="htable"><thead><tr><th class="h-when">When</th><th class="h-num">New</th><th class="h-num">Total</th><th class="h-num">Quarantined</th><th class="h-email">Email</th></tr></thead><tbody>';
+  function who(r){
+    if(r.source&&r.source.indexOf('cron')>=0)return 'Chopper (automated)';
+    if(r.triggeredBy==='Chopper (automated)')return 'Chopper (automated)';
+    if(r.triggeredByName)return r.triggeredByName;
+    if(r.triggeredBy&&r.triggeredBy.indexOf('@')>=0)return r.triggeredBy.split('@')[0];
+    return r.triggeredBy||'unknown';
+  }
+  let h='<table class="htable"><thead><tr><th class="h-when">When</th><th class="h-by">Triggered by</th><th class="h-num">New</th><th class="h-num">Total</th><th class="h-num">Quarantined</th><th class="h-email">Email</th></tr></thead><tbody>';
   runs.forEach(function(r){
     var email=r.emailSent?okIc:(noIc+(r.emailError?' <span class="muted" title="'+String(r.emailError).replace(/"/g,"&quot;")+'">failed</span>':''));
     var q=r.quarantinedProjects?('<span style="color:var(--accent)">'+r.quarantinedOptOuts.toLocaleString()+'</span> <span class="muted">('+r.quarantinedProjects+')</span>'):'<span class="muted">0</span>';
-    h+='<tr><td class="h-when">'+fmtDate(r.ranAt)+'</td><td class="h-num" style="color:#4ade80">'+r.newTotal.toLocaleString()+'</td><td class="h-num muted">'+r.totalCount.toLocaleString()+'</td><td class="h-num">'+q+'</td><td class="h-email">'+email+'</td></tr>';
+    h+='<tr><td class="h-when">'+fmtDate(r.ranAt)+'</td><td class="h-by">'+who(r)+'</td><td class="h-num" style="color:#4ade80">'+r.newTotal.toLocaleString()+'</td><td class="h-num muted">'+r.totalCount.toLocaleString()+'</td><td class="h-num">'+q+'</td><td class="h-email">'+email+'</td></tr>';
   });
   h+='</tbody></table>';
   el.innerHTML=h;

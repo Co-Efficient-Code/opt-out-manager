@@ -636,7 +636,7 @@ async function loadRunlogs(){
   var icOk='<span class="ic ic-ok" title="Mapped"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
   var icBlock='<span class="ic ic-block" title="Unmapped"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>';
   var dash='<span class="muted">-</span>';
-  let ph='<table class="ptable"><thead><tr><th class="c-proj">Project</th><th class="c-pac">PAC</th><th class="c-dest">Destination</th><th class="c-newtot">New / Total</th><th class="c-stat">&nbsp;</th></tr></thead><tbody>';
+  let ph='<table class="ptable"><thead><tr><th class="c-stat">&nbsp;</th><th class="c-proj">Project</th><th class="c-pac">PAC</th><th class="c-dest">Destination</th><th class="c-newtot">New / Total</th></tr></thead><tbody>';
   g.projects.forEach(x=>{
     var mapped=x.status==='mapped';
     var icon=mapped?icOk:icBlock;
@@ -645,7 +645,7 @@ async function loadRunlogs(){
       ?'<span class="nt-new">'+x.newCount.toLocaleString()+'</span><span class="nt-sep">/</span><span class="nt-tot">'+ttl+'</span>'
       :'<span class="nt-tot">'+ttl+'</span>';
     var title=mapped?('Mapped'+(x.source==='override'?' (assigned)':'')):'Unmapped';
-    ph+='<tr><td class="c-proj" title="'+x.project.replace(/"/g,'&quot;')+'">'+x.project+'</td><td class="c-pac">'+(x.pac||dash)+'</td><td class="c-dest">'+(x.destination||dash)+'</td><td class="c-newtot newtot">'+newtot+'</td><td class="c-stat" title="'+title+'">'+icon+'</td></tr>';
+    ph+='<tr><td class="c-stat" title="'+title+'">'+icon+'</td><td class="c-proj" title="'+x.project.replace(/"/g,'&quot;')+'">'+x.project+'</td><td class="c-pac">'+(x.pac||dash)+'</td><td class="c-dest">'+(x.destination||dash)+'</td><td class="c-newtot newtot">'+newtot+'</td></tr>';
   });
   ph+='</tbody></table>';
   $('#rl-proj').innerHTML=ph;$('#rl-proj-card').classList.remove('hide');

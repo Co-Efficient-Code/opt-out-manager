@@ -91,6 +91,12 @@ th{color:var(--muted);font-weight:600}
 .rl-progress{margin-top:14px;max-height:180px;overflow-y:auto;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.6}
 .rl-progress .rl-pline{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .rl-progress .rl-pline.ok{color:#4ade80}
+.htable{width:100%}
+.htable .h-when{width:34%}
+.htable .h-num{text-align:right;width:16%}
+.htable th.h-num{text-align:right}
+.htable .h-email{width:18%;text-align:center}
+.htable th.h-email{text-align:center}
 .ic{display:inline-flex;vertical-align:middle}
 .ic svg{width:17px;height:17px}
 .ic-ok{color:#4ade80}.ic-block{color:#f87171}
@@ -185,6 +191,11 @@ th{color:var(--muted);font-weight:600}
     <div class="card hide" id="rl-proj-card">
       <h2>All projects</h2>
       <div id="rl-proj"></div>
+    </div>
+    <div class="card" id="rl-hist-card">
+      <h2>Run history</h2>
+      <p class="sub">Every pull, with counts and whether the summary email was sent. Correlates with the emails to jacob@coefficient.org.</p>
+      <div id="rl-hist"><span class="muted">No runs yet. Hit Run full pull.</span></div>
     </div>
   </div>
 
@@ -374,6 +385,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   $('#uploaded').classList.toggle('hide',t.dataset.tab!=='uploaded');
   if(t.dataset.tab==='browse')loadBrowse();
   if(t.dataset.tab==='uploaded')loadUploaded();
+  if(t.dataset.tab==='runlogs')loadRunHistory();
 });
 // drag/drop wiring
 function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
@@ -699,6 +711,23 @@ async function loadRunlogs(){
   });
   ph+='</tbody></table>';
   $('#rl-proj').innerHTML=ph;$('#rl-proj-card').classList.remove('hide');
+  loadRunHistory();
+}
+async function loadRunHistory(){
+  const el=$('#rl-hist');if(!el)return;
+  let d;try{d=await jsonFetch('/api/runlogs/history');}catch(e){el.innerHTML='<span class="muted">Could not load history: '+e.message+'</span>';return;}
+  const runs=(d&&d.runs)||[];
+  if(!runs.length){el.innerHTML='<span class="muted">No runs yet. Hit Run full pull.</span>';return;}
+  var okIc='<span class="ic ic-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
+  var noIc='<span class="ic ic-block"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>';
+  let h='<table class="htable"><thead><tr><th class="h-when">When</th><th class="h-num">New</th><th class="h-num">Total</th><th class="h-num">Quarantined</th><th class="h-email">Email</th></tr></thead><tbody>';
+  runs.forEach(function(r){
+    var email=r.emailSent?okIc:(noIc+(r.emailError?' <span class="muted" title="'+String(r.emailError).replace(/"/g,"&quot;")+'">failed</span>':''));
+    var q=r.quarantinedProjects?('<span style="color:var(--accent)">'+r.quarantinedOptOuts.toLocaleString()+'</span> <span class="muted">('+r.quarantinedProjects+')</span>'):'<span class="muted">0</span>';
+    h+='<tr><td class="h-when">'+fmtDate(r.ranAt)+'</td><td class="h-num" style="color:#4ade80">'+r.newTotal.toLocaleString()+'</td><td class="h-num muted">'+r.totalCount.toLocaleString()+'</td><td class="h-num">'+q+'</td><td class="h-email">'+email+'</td></tr>';
+  });
+  h+='</tbody></table>';
+  el.innerHTML=h;
 }
 // uploaded lists (Google Drive, read-only)
 async function loadUploaded(){

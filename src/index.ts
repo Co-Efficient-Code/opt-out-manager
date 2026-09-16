@@ -11,6 +11,7 @@ import { pullOptOuts, MAGA_CLIENT } from './rgop';
 import { buildRunLog, buildRunEmail } from './runlogs';
 import { loadOverrides, setOverride, PAC_SLUGS, DESTINATIONS } from './mapping';
 import { sendEmail } from './email';
+import { appendRunRecord, recordFromRun, loadRunHistory } from './runhistory';
 import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
@@ -427,6 +428,14 @@ api.get('/runlogs/dry-run', async (c) => {
           emailStatus = { sent: false, error: e instanceof Error ? e.message : String(e) };
           send({ type: 'progress', phase: 'email', message: `Email failed (run still OK): ${emailStatus.error}` });
         }
+        // Persist a compact run record so the UI history table (and later the
+        // cron) can show when each pull happened. Best-effort: never fail the
+        // run over a history write.
+        try {
+          await appendRunRecord(c.env, recordFromRun(log, emailStatus, false));
+        } catch (e) {
+          send({ type: 'progress', phase: 'history', message: `Run-history save failed (run still OK): ${e instanceof Error ? e.message : String(e)}` });
+        }
         send({ type: 'done', ok: true, dryRun: true, wrote: false, log, email: emailStatus });
       } catch (e) {
         send({ type: 'error', ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -442,6 +451,15 @@ api.get('/runlogs/dry-run', async (c) => {
       'X-Accel-Buffering': 'no',
     },
   });
+});
+
+// RUN HISTORY: compact record of past pulls (when + counts + email outcome).
+api.get('/runlogs/history', async (c) => {
+  try {
+    return c.json({ ok: true, runs: await loadRunHistory(c.env) });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
 });
 
 // MAPPING: read current human-assigned project overrides + the canonical

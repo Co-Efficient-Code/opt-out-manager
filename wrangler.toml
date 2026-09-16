@@ -44,6 +44,12 @@ routes = [
   { pattern = "optouts.coefficient.org", custom_domain = true }
 ]
 
+# Project -> (pac, destination) mapping overrides (human-assigned). SEPARATE
+# prod namespace so prod mappings never mix with staging test data.
+[[env.production.kv_namespaces]]
+binding = "OPTOUT_MAPPING"
+id = "c8cf8d1469094946beb41e22b77c22bd"
+
 [env.production.vars]
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
 S3_REGION = "us-east-1"

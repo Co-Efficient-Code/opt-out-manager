@@ -62,12 +62,17 @@ select,input[type=file]{width:100%;background:#0a1628;border:1px solid var(--bor
 .sstatus b{color:var(--text);font-weight:600}
 .srow{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:18px}
 .sprogress{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)}
-.kmap{background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px}
-.kmrow{display:flex;align-items:center;gap:12px}
-.kmlbl{flex:0 0 150px;font-size:13px;color:var(--text)}
-.kmrow select{flex:1}
+/* 3-up input row (PAC / Destination / Project) */
+.frow3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.fcol{min-width:0;display:flex;flex-direction:column}
+.fcol label{margin-top:0}
+/* 4-up column-mapping row */
+.kmap4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:12px}
+.kmcol{min-width:0;display:flex;flex-direction:column;gap:5px}
+.kmlbl{font-size:12px;color:var(--muted)}
 .req{color:var(--accent);font-weight:700}
-.kmrow select.bad{border-color:var(--accent)}
+.kmcol select.bad{border-color:var(--accent)}
+@media(max-width:720px){.frow3{grid-template-columns:1fr}.kmap4{grid-template-columns:1fr 1fr}}
 .muted{color:var(--muted)} .hide{display:none}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes s{to{transform:rotate(360deg)}}
@@ -162,29 +167,33 @@ th{color:var(--muted);font-weight:600}
   <div id="scrub">
     <div class="card">
       <h2>Scrub a contact list</h2>
-      <label>Account (PAC)</label>
-      <select id="s-org"><option value="">Loading accounts...</option></select>
-      <label>Destination</label>
-      <select id="s-dest">
-        <option value="">Select a destination...</option>
-        <option value="bigdog">Big Dog Strategies</option>
-        <option value="creativedirect">Creative Direct</option>
-      </select>
-      <label>Project name</label>
-      <input type="text" id="s-project" placeholder="261187 NH Senate Big Dog SAG MMS 9.16" style="width:100%;background:#0a1628;border:1px solid var(--border);color:var(--text);padding:11px 12px;border-radius:8px;font-family:inherit;font-size:14px">
+      <div class="frow3">
+        <div class="fcol">
+          <label>Account (PAC)</label>
+          <select id="s-org"><option value="">Loading accounts...</option></select>
+        </div>
+        <div class="fcol">
+          <label>Destination</label>
+          <select id="s-dest">
+            <option value="">Select a destination...</option>
+            <option value="bigdog">Big Dog Strategies</option>
+            <option value="creativedirect">Creative Direct</option>
+          </select>
+        </div>
+        <div class="fcol">
+          <label>Project name</label>
+          <input type="text" id="s-project" placeholder="261187 NH Senate Big Dog SAG MMS 9.16">
+        </div>
+      </div>
       <label>Contact list (CSV or Excel)</label>
       <div class="drop" id="s-drop"><span id="s-drop-text">Drop a CSV or Excel file here or click to choose</span><input type="file" id="s-file" accept=".csv,.xlsx,.xls" class="hide"></div>
-      <div id="s-colwrap" class="hide">
-        <label>Phone column <span class="muted" style="font-weight:400">(auto-detected, override if needed)</span></label>
-        <select id="s-col"><option value="">Auto-detect</option></select>
-      </div>
       <div id="s-keepwrap" class="hide">
         <label>Output columns <span class="muted" style="font-weight:400">(map your file's columns; only these are kept in the output)</span></label>
-        <div class="kmap">
-          <div class="kmrow"><span class="kmlbl">CellPhone <span class="req">*</span></span><select class="s-map" id="s-map-cellphone" data-field="CellPhone"></select></div>
-          <div class="kmrow"><span class="kmlbl">FirstName <span class="req">*</span></span><select class="s-map" id="s-map-firstname" data-field="FirstName"></select></div>
-          <div class="kmrow"><span class="kmlbl">LastName <span class="req">*</span></span><select class="s-map" id="s-map-lastname" data-field="LastName"></select></div>
-          <div class="kmrow"><span class="kmlbl">SelectName <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-selectname" data-field="SelectName"></select></div>
+        <div class="kmap4">
+          <div class="kmcol"><span class="kmlbl">CellPhone <span class="req">*</span></span><select class="s-map" id="s-map-cellphone" data-field="CellPhone"></select></div>
+          <div class="kmcol"><span class="kmlbl">FirstName <span class="req">*</span></span><select class="s-map" id="s-map-firstname" data-field="FirstName"></select></div>
+          <div class="kmcol"><span class="kmlbl">LastName <span class="req">*</span></span><select class="s-map" id="s-map-lastname" data-field="LastName"></select></div>
+          <div class="kmcol"><span class="kmlbl">SelectName <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-selectname" data-field="SelectName"></select></div>
         </div>
         <div class="note hide" id="s-map-warn"></div>
       </div>
@@ -469,7 +478,7 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
 function splitCsvClient(line){const out=[];let cur='',q=false;for(let i=0;i<line.length;i++){const ch=line[i];if(q){if(ch==='"'&&line[i+1]==='"'){cur+='"';i++;}else if(ch==='"')q=false;else cur+=ch;}else{if(ch==='"')q=true;else if(ch===','){out.push(cur);cur='';}else cur+=ch;}}out.push(cur);return out;}
 function guessPhoneCol(header){const n=header.map(h=>h.trim().toLowerCase());const c=['phone','phone number','phonenumber','cell','mobile','phone_number'];for(const x of c){const i=n.indexOf(x);if(i>=0)return i;}return n.findIndex(h=>h.includes('phone'));}
 const s=wireDrop('#s-drop','#s-file',null,'#s-run','#s-org','#s-dest');
-s.colwrap='#s-colwrap';s.col='#s-col';
+// Phone column is now driven by the CellPhone mapping (no separate dropdown).
 // Scrub drop zone: go green + show file name inside the zone once a file is chosen.
 // Keeps the <input> element stable (no innerHTML swap) so wireDrop bindings survive.
 function sFileUI(){
@@ -622,7 +631,6 @@ function sResetForm(){
   $('#s-dest').value='';
   $('#s-project').value='';
   $('#s-result').classList.add('hide');
-  $('#s-colwrap').classList.add('hide');
   $('#s-keepwrap').classList.add('hide');$('#s-map-warn').classList.add('hide');sHeaderCols=[];
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
   $('#s-progress').classList.add('hide');$('#s-progress-text').textContent='';
@@ -672,7 +680,9 @@ $('#s-run').onclick=async()=>{
   if(!dest){alert('Pick a destination first (the cleaned list is saved to that Drive folder).');return;}
   if(!project){alert('Enter a project name (used as the Drive file name).');return;}
   if(!sMapValidate()){alert('Map the required output columns (CellPhone, FirstName, LastName) before scrubbing.');return;}
-  const colv=$('#s-col').value;
+  // Phone column index comes from the CellPhone mapping.
+  const cpsel=$('#s-map-cellphone');
+  const colv=(cpsel&&cpsel.value!=='')?cpsel.value:'';
   btn.disabled=true;btn.textContent='Working...';
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
   // Single upload, streamed NDJSON response drives the live progress line.

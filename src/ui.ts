@@ -38,7 +38,7 @@ a{color:var(--blue)}
 .card h2{font-size:18px;margin-bottom:6px}
 .card p.sub{color:var(--muted);margin:0 0 18px;font-size:14px}
 label{display:block;color:var(--muted);font-size:13px;margin:14px 0 6px;font-weight:500}
-select,input[type=file]{width:100%;background:#0a1628;border:1px solid var(--border);color:var(--text);padding:11px 12px;border-radius:8px;font-family:inherit;font-size:14px}
+select,input[type=file],input[type=text]{width:100%;background:#0a1628;border:1px solid var(--border);color:var(--text);padding:11px 12px;border-radius:8px;font-family:inherit;font-size:14px;box-sizing:border-box}
 .drop{border:2px dashed var(--border);border-radius:10px;padding:26px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
 .drop.hot{border-color:var(--accent);color:var(--text);background:#0c1d38}
 .drop.filled{border-style:solid;border-color:#1f9d55;color:var(--text);background:#0d2a1a;cursor:default}

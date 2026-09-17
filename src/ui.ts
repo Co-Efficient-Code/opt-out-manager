@@ -525,6 +525,9 @@ async function autoPreview(){
 let sMode='scrub'; // 'scrub' | 'again'
 function sResetForm(){
   s.file.value='';sFileUI();
+  $('#s-org').value='';
+  $('#s-dest').value='';
+  $('#s-project').value='';
   $('#s-result').classList.add('hide');
   $('#s-colwrap').classList.add('hide');
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';

@@ -249,31 +249,53 @@ api.post('/scrub/drive', async (c) => {
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
   }
+  // Scrub once. Drive save is best-effort: if it fails (e.g. Drive perms),
+  // still return stats + cleaned CSV so the user can download.
+  let result;
   try {
-    const result = await scrubContacts(c.env, org, csv, phoneCol);
-    const base = project.replace(/\.csv$/i, '');
-    const fileName = `${base}_scrubbed.csv`;
+    result = await scrubContacts(c.env, org, csv, phoneCol);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+  const base = project.replace(/\.csv$/i, '');
+  const fileName = `${base}_scrubbed.csv`;
+  let driveOk = false;
+  let driveFileName: string | undefined;
+  let driveFileId: string | undefined;
+  let driveError: string | undefined;
+  try {
     const saved = await driveUploadCsv(
       c.env,
       driveFolderFor(c.env, dest as DriveDest),
       fileName,
       result.cleanedCsv,
     );
-    return c.json({
-      ok: true,
-      org,
-      destinationLabel: destMap[dest],
-      driveFileName: saved.name,
-      driveFileId: saved.id,
-      inputRows: result.inputRows,
-      scrubbed: result.scrubbed,
-      kept: result.kept,
-      optOutSetSize: result.optOutSetSize,
-      unparseablePhones: result.unparseablePhones,
-    });
+    driveOk = true;
+    driveFileName = saved.name;
+    driveFileId = saved.id;
   } catch (e) {
-    return c.json({ error: String(e) }, 502);
+    driveError = e instanceof Error ? e.message : String(e);
   }
+  return c.json({
+    ok: true,
+    org,
+    inputFile: file.name,
+    destinationLabel: destMap[dest],
+    driveOk,
+    driveFileName,
+    driveFileId,
+    driveError,
+    downloadName: fileName,
+    cleanedCsv: result.cleanedCsv,
+    inputRows: result.inputRows,
+    phoneColumn: result.phoneColumn,
+    phoneColumnIndex: result.phoneColumnIndex,
+    autoDetected: result.autoDetected,
+    scrubbed: result.scrubbed,
+    kept: result.kept,
+    optOutSetSize: result.optOutSetSize,
+    unparseablePhones: result.unparseablePhones,
+  });
 });
 
 // Exact record count for one file (read-only). Guards very large files.

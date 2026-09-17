@@ -548,19 +548,21 @@ $('#s-run').onclick=async()=>{
   if(!project){alert('Enter a project name (used as the Drive file name).');return;}
   const colv=$('#s-col').value;
   const orgLabel=($('#s-org').selectedOptions[0]||{}).textContent||org;
+  const destLabel=(dest==='bigdog'?'Big Dog':'Creative Direct');
   btn.disabled=true;btn.textContent='Working...';
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
-  // 1) Scrub (stats)
+  // Single upload: scrub + Drive save + returns cleaned CSV for download.
   let d;
   try{
     sProg('Reading file...');
     const up=await toUploadFile(f);
-    const fd=new FormData();fd.append('org',org);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
-    sProg('Scrubbing against opt-outs for '+orgLabel+'...');
-    const r=await fetch('/api/scrub',{method:'POST',body:fd});d=await r.json();
-  }catch(e){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Error: '+e.message);return;}
-  if(d.error){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Error: '+d.error);return;}
-  sProg('Scrubbed against '+d.optOutSetSize.toLocaleString()+' opt-outs for '+orgLabel+'. Rendering results...');
+    const fd=new FormData();fd.append('org',org);fd.append('dest',dest);fd.append('project',project);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
+    sProg('Scrubbing '+orgLabel+' list against opt-outs, saving to '+destLabel+' Drive...');
+    d=await jsonFetch('/api/scrub/drive',{method:'POST',body:fd});
+  }catch(e){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Scrub failed: '+e.message);return;}
+  if(d.error){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Scrub failed: '+d.error);return;}
+  // Render results
+  sProg('Rendering results...');
   $('#r-file').textContent=d.inputFile;$('#r-org').textContent=d.org;
   $('#r-col').textContent=d.phoneColumn+(d.autoDetected?' (auto)':' (manual)');
   $('#r-in').textContent=d.inputRows.toLocaleString();
@@ -571,24 +573,16 @@ $('#s-run').onclick=async()=>{
   if(d.unparseablePhones>0){u.classList.remove('hide');u.textContent=d.unparseablePhones.toLocaleString()+' rows had unreadable phone numbers and were kept (not scrubbed). Check the phone column.';}
   else u.classList.add('hide');
   $('#s-result').classList.remove('hide');
-  const dlName=project.replace(/\.csv$/i,'')+'_scrubbed.csv';
-  let dlLine,drLine;
-  // 2) Save a copy to Drive
-  try{
-    sProg('Saving to '+(dest==='bigdog'?'Big Dog':'Creative Direct')+' Google Drive...');
-    const up2=await toUploadFile(f);
-    const fd2=new FormData();fd2.append('org',org);fd2.append('dest',dest);fd2.append('project',project);fd2.append('file',up2);if(colv!=='')fd2.append('phoneCol',colv);
-    const dr=await jsonFetch('/api/scrub/drive',{method:'POST',body:fd2});
-    if(dr.error){drLine='<span class="bad">\u2715 Drive save failed</span> <span class="muted">('+dr.error+')</span>';}
-    else{drLine='<span class="ok">\u2713 Saved to '+dr.destinationLabel+' Drive</span> <span class="muted">as '+dr.driveFileName+'</span>';}
-  }catch(e){drLine='<span class="bad">\u2715 Drive save failed</span> <span class="muted">('+e.message+')</span>';}
-  // 3) Download cleaned CSV (fires automatically)
+  const dlName=d.downloadName||(project.replace(/\.csv$/i,'')+'_scrubbed.csv');
+  let drLine,dlLine;
+  // Drive status from the same response
+  if(d.driveOk){drLine='<span class="ok">\u2713 Saved to '+d.destinationLabel+' Drive</span> <span class="muted">as '+d.driveFileName+'</span>';}
+  else{drLine='<span class="bad">\u2715 Drive save failed</span> <span class="muted">('+(d.driveError||'unknown error')+')</span>';}
+  // Download the cleaned CSV returned in the response (no second upload)
   try{
     sProg('Downloading cleaned list...');
-    const up=await toUploadFile(f);
-    const fd=new FormData();fd.append('org',org);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
-    const b=await (await fetch('/api/scrub?download=1',{method:'POST',body:fd})).blob();
-    const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=dlName;a.click();
+    const blob=new Blob([d.cleanedCsv||''],{type:'text/csv'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=dlName;a.click();
     dlLine='<span class="ok">\u2713 Downloaded</span> <b>'+dlName+'</b>';
   }catch(e){dlLine='<span class="bad">\u2715 Download failed</span> <span class="muted">('+e.message+')</span>';}
   // Progress line disappears; green checks take its place

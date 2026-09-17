@@ -62,10 +62,12 @@ select,input[type=file]{width:100%;background:#0a1628;border:1px solid var(--bor
 .sstatus b{color:var(--text);font-weight:600}
 .srow{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:18px}
 .sprogress{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)}
-.kgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 14px;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:12px}
-.kgrid label{display:flex;align-items:center;gap:7px;margin:0;color:var(--text);font-size:13px;font-weight:400;cursor:pointer}
-.kgrid input{width:auto}
-.kcbar a{font-size:12px;color:var(--accent);text-decoration:none;margin-left:10px;font-weight:600}
+.kmap{background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.kmrow{display:flex;align-items:center;gap:12px}
+.kmlbl{flex:0 0 150px;font-size:13px;color:var(--text)}
+.kmrow select{flex:1}
+.req{color:var(--accent);font-weight:700}
+.kmrow select.bad{border-color:var(--accent)}
 .muted{color:var(--muted)} .hide{display:none}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes s{to{transform:rotate(360deg)}}
@@ -177,11 +179,14 @@ th{color:var(--muted);font-weight:600}
         <select id="s-col"><option value="">Auto-detect</option></select>
       </div>
       <div id="s-keepwrap" class="hide">
-        <label style="display:flex;align-items:center;justify-content:space-between">
-          <span>Columns to keep <span class="muted" style="font-weight:400">(unchecked columns are removed from the output)</span></span>
-          <span class="kcbar"><a href="#" id="s-keep-all">All</a> <a href="#" id="s-keep-none">None</a> <a href="#" id="s-keep-default">Default</a></span>
-        </label>
-        <div id="s-keep" class="kgrid"></div>
+        <label>Output columns <span class="muted" style="font-weight:400">(map your file's columns; only these are kept in the output)</span></label>
+        <div class="kmap">
+          <div class="kmrow"><span class="kmlbl">CellPhone <span class="req">*</span></span><select class="s-map" id="s-map-cellphone" data-field="CellPhone"></select></div>
+          <div class="kmrow"><span class="kmlbl">FirstName <span class="req">*</span></span><select class="s-map" id="s-map-firstname" data-field="FirstName"></select></div>
+          <div class="kmrow"><span class="kmlbl">LastName <span class="req">*</span></span><select class="s-map" id="s-map-lastname" data-field="LastName"></select></div>
+          <div class="kmrow"><span class="kmlbl">SelectName <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-selectname" data-field="SelectName"></select></div>
+        </div>
+        <div class="note hide" id="s-map-warn"></div>
       </div>
       <div class="srow">
         <button class="btn" id="s-run" disabled>Scrub list</button>
@@ -480,13 +485,23 @@ function sFileUI(){
   }
   sBuildKeep();
 }
-// Default columns to keep (case-insensitive). Present ones are pre-checked.
-const S_KEEP_DEFAULT=['cellphone','phone','phonenumber','cell','mobile','firstname','middlename','lastname','namesuffix','state','congressionaldistrict'];
+// Output field mapping. Required fields must be mapped; SelectName is optional.
+// Auto-detect by matching common header-name aliases.
+const S_MAP_ALIASES={
+  CellPhone:['cellphone','cell phone','phone','phonenumber','phone number','cell','mobile','phone_number'],
+  FirstName:['firstname','first name','first','fname'],
+  LastName:['lastname','last name','last','lname'],
+  SelectName:['selectname','select name','select']
+};
+const S_MAP_REQUIRED=['CellPhone','FirstName','LastName'];
+// Output order for kept columns:
+const S_MAP_ORDER=['SelectName','FirstName','LastName','CellPhone'];
 let sHeaderCols=[];
-// Read the uploaded file's header (CSV or XLSX) and render keep-column checkboxes.
+function sMapSelId(field){return '#s-map-'+field.toLowerCase();}
+// Read the uploaded file's header (CSV or XLSX) and populate the mapping dropdowns.
 async function sBuildKeep(){
-  const wrap=$('#s-keepwrap');const grid=$('#s-keep');const f=s.file.files[0];
-  if(!f){wrap.classList.add('hide');grid.innerHTML='';sHeaderCols=[];return;}
+  const wrap=$('#s-keepwrap');const f=s.file.files[0];
+  if(!f){wrap.classList.add('hide');sHeaderCols=[];return;}
   let cols=[];
   try{
     const nm=(f.name||'').toLowerCase();
@@ -503,27 +518,52 @@ async function sBuildKeep(){
     }
   }catch(e){wrap.classList.add('hide');return;}
   sHeaderCols=cols;
-  grid.innerHTML=cols.map((c,i)=>{
-    const name=(c||('col '+i));
-    const def=S_KEEP_DEFAULT.indexOf(String(c).trim().toLowerCase())>=0;
-    return '<label><input type="checkbox" class="s-keep-cb" value="'+i+'"'+(def?' checked':'')+'>'+name.replace(/</g,'&lt;')+'</label>';
-  }).join('');
+  const lower=cols.map(c=>String(c).trim().toLowerCase());
+  Object.keys(S_MAP_ALIASES).forEach(field=>{
+    const sel=$(sMapSelId(field));if(!sel)return;
+    const optional=S_MAP_REQUIRED.indexOf(field)<0;
+    let auto=-1;
+    for(const a of S_MAP_ALIASES[field]){const i=lower.indexOf(a);if(i>=0){auto=i;break;}}
+    let html=(optional?'<option value="">(not included)</option>':'<option value="">-- select a column --</option>');
+    html+=cols.map((c,i)=>'<option value="'+i+'"'+(i===auto?' selected':'')+'>'+String(c||('col '+i)).replace(/</g,'&lt;')+'</option>').join('');
+    sel.innerHTML=html;
+    sel.onchange=sMapValidate;
+  });
   wrap.classList.remove('hide');
+  sMapValidate();
 }
-// Returns array of column names to keep, or null if all are checked (no trim).
+// Validate required mappings; disable Scrub + warn if any required field is unmapped.
+function sMapValidate(){
+  if($('#s-keepwrap').classList.contains('hide'))return true;
+  const missing=[];
+  S_MAP_REQUIRED.forEach(field=>{
+    const sel=$(sMapSelId(field));if(!sel)return;
+    const ok=sel.value!=='';
+    sel.classList.toggle('bad',!ok);
+    if(!ok)missing.push(field);
+  });
+  const warn=$('#s-map-warn');
+  if(missing.length){warn.textContent='Map these required columns before scrubbing: '+missing.join(', ')+'. Auto-detect could not find them in this file.';warn.classList.remove('hide');}
+  else warn.classList.add('hide');
+  // Reflect in the run button (only when in scrub mode with a file+dest+pac).
+  if(sMode==='scrub'){const baseReady=!!s.file.files[0]&&!!$('#s-org').value&&!!$('#s-dest').value;$('#s-run').disabled=baseReady?(missing.length>0):true;}
+  return missing.length===0;
+}
+// Build the keepColumns list (in output order) from the current mapping.
+// Returns array of source column NAMES to keep, or null if mapping UI isn't active.
 function sKeepColumns(){
-  const cbs=Array.prototype.slice.call(document.querySelectorAll('.s-keep-cb'));
-  if(cbs.length===0)return null;
-  const checked=cbs.filter(cb=>cb.checked);
-  if(checked.length===cbs.length)return null; // keep everything -> no trim
-  return checked.map(cb=>sHeaderCols[parseInt(cb.value,10)]);
+  if($('#s-keepwrap').classList.contains('hide'))return null;
+  const out=[];
+  S_MAP_ORDER.forEach(field=>{
+    const sel=$(sMapSelId(field));if(!sel||sel.value==='')return;
+    const name=sHeaderCols[parseInt(sel.value,10)];
+    if(name&&out.indexOf(name)<0)out.push(name);
+  });
+  return out.length?out:null;
 }
-$('#s-keep-all').onclick=(e)=>{e.preventDefault();document.querySelectorAll('.s-keep-cb').forEach(cb=>cb.checked=true);};
-$('#s-keep-none').onclick=(e)=>{e.preventDefault();document.querySelectorAll('.s-keep-cb').forEach(cb=>cb.checked=false);};
-$('#s-keep-default').onclick=(e)=>{e.preventDefault();document.querySelectorAll('.s-keep-cb').forEach(cb=>{cb.checked=S_KEEP_DEFAULT.indexOf(String(sHeaderCols[parseInt(cb.value,10)]).trim().toLowerCase())>=0;});};
 // Filled zone should not re-open the picker on body click (only the Change link handles it).
 // wireDrop already handles click-to-open + drag/drop; we only block re-open when filled.
-s.afterPick=sFileUI;
+s.afterPick=()=>{sFileUI();sMapValidate();};
 const _sDropClick=$('#s-drop').onclick;
 $('#s-drop').onclick=(e)=>{if($('#s-drop').classList.contains('filled'))return;if(_sDropClick)_sDropClick.call($('#s-drop'),e);else s.file.click();};
 const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org','#p-dest');
@@ -583,7 +623,7 @@ function sResetForm(){
   $('#s-project').value='';
   $('#s-result').classList.add('hide');
   $('#s-colwrap').classList.add('hide');
-  $('#s-keepwrap').classList.add('hide');$('#s-keep').innerHTML='';
+  $('#s-keepwrap').classList.add('hide');$('#s-map-warn').classList.add('hide');sHeaderCols=[];
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
   $('#s-progress').classList.add('hide');$('#s-progress-text').textContent='';
   const btn=$('#s-run');btn.textContent='Scrub list';btn.classList.remove('ghost');btn.disabled=true;
@@ -631,6 +671,7 @@ $('#s-run').onclick=async()=>{
   const dest=$('#s-dest').value;const project=$('#s-project').value.trim();
   if(!dest){alert('Pick a destination first (the cleaned list is saved to that Drive folder).');return;}
   if(!project){alert('Enter a project name (used as the Drive file name).');return;}
+  if(!sMapValidate()){alert('Map the required output columns (CellPhone, FirstName, LastName) before scrubbing.');return;}
   const colv=$('#s-col').value;
   btn.disabled=true;btn.textContent='Working...';
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';

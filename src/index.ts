@@ -51,15 +51,17 @@ app.post('/cron/run', async (c) => {
   }
   try {
     const appUrl = c.env.APP_URL || new URL(c.req.url).origin;
-    const { log, email } = await runOptOutSync(c.env, {
+    const { log, write, email } = await runOptOutSync(c.env, {
       appUrl,
       triggeredBy: 'Chopper (automated)',
       source: 'readygop-cron',
     });
+    const writesEnabled = c.env.ALLOW_S3_WRITES === 'true';
     return c.json({
       ok: true,
-      dryRun: true,
-      wrote: false,
+      dryRun: !writesEnabled,
+      wrote: write.written > 0,
+      writtenFiles: write.written,
       ranAt: log.ranAt,
       newTotal: log.groups.reduce((s, g) => s + g.newCount, 0),
       quarantinedProjects: log.quarantined.length,

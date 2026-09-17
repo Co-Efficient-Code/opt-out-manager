@@ -38,7 +38,9 @@ jobs:
           STAGING_CRON_SECRET: ${{ secrets.OPTOUT_STAGING_CRON_SECRET }}
           PROD_URL: ${{ secrets.OPTOUT_PROD_URL }}
           PROD_CRON_SECRET: ${{ secrets.OPTOUT_PROD_CRON_SECRET }}
-          TARGET: ${{ github.event.inputs.target || 'staging' }}
+          # Scheduled (nightly) runs target PRODUCTION, which has
+          # ALLOW_S3_WRITES=true -> real writes to client buckets.
+          TARGET: ${{ github.event.inputs.target || 'production' }}
         run: |
           set -euo pipefail
           if [ "$TARGET" = "production" ]; then

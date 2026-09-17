@@ -309,7 +309,7 @@ export function buildRunEmail(
   t.push(`Opt-Out Sync run: ${log.client}`);
   t.push(`Ran: ${ranLocal} CT`);
   t.push('');
-  t.push(`New opt-outs (would be uploaded): ${newTotal.toLocaleString()}`);
+  t.push(`New opt-outs uploaded: ${newTotal.toLocaleString()}`);
   t.push(`${log.totalCount.toLocaleString()} total opt-outs`);
   t.push('');
   if (log.groups.length) {

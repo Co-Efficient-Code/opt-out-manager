@@ -11,6 +11,7 @@ export interface Env {
   S3_REGION: string;
   APP_ENV?: string;
   APP_URL?: string; // base URL for email links (cron has no request origin)
+  ALLOW_S3_WRITES?: string; // 'true' enables real writes to client S3 buckets
   DRIVE_ROOT_FOLDER?: string;
   DRIVE_FOLDER_BIGDOG?: string;
   DRIVE_FOLDER_CREATIVEDIRECT?: string;

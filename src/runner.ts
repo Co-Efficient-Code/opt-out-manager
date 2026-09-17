@@ -1,6 +1,7 @@
 import type { Env } from './types';
 import { pullOptOuts, MAGA_CLIENT } from './rgop';
-import { buildRunLog, buildRunEmail, type RunLog } from './runlogs';
+import { buildRunLog, buildRunEmail, buildOutputFiles, type RunLog } from './runlogs';
+import { putObjectNoOverwrite } from './s3';
 import { sendEmail } from './email';
 import { appendRunRecord, recordFromRun, saveLastRunLog } from './runhistory';
 
@@ -15,9 +16,16 @@ import { appendRunRecord, recordFromRun, saveLastRunLog } from './runhistory';
  * nothing (no browser). Email/history failures never fail the run.
  */
 
+export interface WriteResult {
+  attempted: boolean; // was writing enabled this run?
+  files: { key: string; bucketRole: string; rows: number; status: 'written' | 'exists' | 'error'; detail?: string }[];
+  written: number; // count of files newly written
+}
+
 export interface RunResult {
   log: RunLog;
   email: { sent: boolean; error?: string };
+  write: WriteResult;
 }
 
 export interface RunOptions {
@@ -29,7 +37,15 @@ export interface RunOptions {
   onProgress?: (phase: string, message: string, extra?: Record<string, unknown>) => void | Promise<void>;
 }
 
-const DEFAULT_EMAIL_TO = ['jacob@coefficient.org'];
+const DEFAULT_EMAIL_TO = [
+  'jacob@coefficient.org',
+  'ryan@coefficient.org',
+  'gregory@coefficient.org',
+  'jessica@coefficient.org',
+  'lydia@coefficient.org',
+  'walker@coefficient.org',
+  'alex@coefficient.org',
+];
 
 export async function runOptOutSync(env: Env, opts: RunOptions): Promise<RunResult> {
   const prog = async (phase: string, message: string, extra?: Record<string, unknown>) => {
@@ -53,7 +69,38 @@ export async function runOptOutSync(env: Env, opts: RunOptions): Promise<RunResu
     (msg) => prog('readback', msg),
   );
 
-  // Summary email (dry run: no S3 writes). Failure never fails the run.
+  // --- S3 WRITE STEP -------------------------------------------------------
+  // Writes only when ALLOW_S3_WRITES === 'true' (per-env config, OFF by
+  // default). Writes each mapped group's NEW opt-outs to its REAL destination
+  // bucket under optouts/<pac>/, using putObjectNoOverwrite (never clobbers).
+  // Quarantined/unmapped projects produce no output file, so they never write.
+  const write: WriteResult = { attempted: false, files: [], written: 0 };
+  if (env.ALLOW_S3_WRITES === 'true') {
+    write.attempted = true;
+    const files = buildOutputFiles(log);
+    let i = 0;
+    for (const f of files) {
+      i += 1;
+      await prog('write', `Writing to S3 (${i}/${files.length}): ${f.key}`);
+      try {
+        const res = await putObjectNoOverwrite(env, f.bucketRole, f.key, f.content, 'text/csv');
+        if (res.status === 412) {
+          write.files.push({ key: f.key, bucketRole: f.bucketRole, rows: f.rowCount, status: 'exists' });
+        } else if (res.ok) {
+          write.files.push({ key: f.key, bucketRole: f.bucketRole, rows: f.rowCount, status: 'written' });
+          write.written += 1;
+        } else {
+          const body = await res.text();
+          write.files.push({ key: f.key, bucketRole: f.bucketRole, rows: f.rowCount, status: 'error', detail: `HTTP ${res.status}: ${body.slice(0, 160)}` });
+        }
+      } catch (e) {
+        write.files.push({ key: f.key, bucketRole: f.bucketRole, rows: f.rowCount, status: 'error', detail: e instanceof Error ? e.message : String(e) });
+      }
+    }
+    await prog('write', `S3 write complete: ${write.written} file(s) written`);
+  }
+
+  // Summary email. Failure never fails the run.
   let email: { sent: boolean; error?: string } = { sent: false };
   try {
     await prog('email', 'Sending summary email...');
@@ -78,12 +125,12 @@ export async function runOptOutSync(env: Env, opts: RunOptions): Promise<RunResu
   try {
     await appendRunRecord(
       env,
-      recordFromRun(log, email, false, opts.triggeredBy, opts.triggeredByName),
+      recordFromRun(log, email, write.attempted && write.written > 0, opts.triggeredBy, opts.triggeredByName),
     );
     await saveLastRunLog(env, { log, email });
   } catch (e) {
     await prog('history', `Run-history save failed (run still OK): ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  return { log, email };
+  return { log, email, write };
 }

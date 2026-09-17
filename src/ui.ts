@@ -61,6 +61,7 @@ select,input[type=file]{width:100%;background:#0a1628;border:1px solid var(--bor
 .sstatus .bad{color:#f3c99a}
 .sstatus b{color:var(--text);font-weight:600}
 .srow{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:18px}
+.sprogress{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)}
 .muted{color:var(--muted)} .hide{display:none}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes s{to{transform:rotate(360deg)}}
@@ -173,6 +174,7 @@ th{color:var(--muted);font-weight:600}
       </div>
       <div class="srow">
         <button class="btn" id="s-run" disabled>Scrub list</button>
+        <div class="sprogress hide" id="s-progress"><span class="spin"></span><span id="s-progress-text"></span></div>
         <div class="sstatus hide" id="s-drive-msg"></div>
       </div>
     </div>
@@ -526,10 +528,14 @@ function sResetForm(){
   $('#s-result').classList.add('hide');
   $('#s-colwrap').classList.add('hide');
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
+  $('#s-progress').classList.add('hide');$('#s-progress-text').textContent='';
   const btn=$('#s-run');btn.textContent='Scrub list';btn.classList.remove('ghost');btn.disabled=true;
   sMode='scrub';
   s.onpick();
 }
+// Live single-line progress narration. Hidden when idle; replaced by green checks when done.
+function sProg(text){const p=$('#s-progress');$('#s-progress-text').textContent=text;p.classList.remove('hide');}
+function sProgDone(){$('#s-progress').classList.add('hide');$('#s-progress-text').textContent='';}
 $('#s-run').onclick=async()=>{
   const btn=$('#s-run');
   if(sMode==='again'){sResetForm();return;}
@@ -538,15 +544,20 @@ $('#s-run').onclick=async()=>{
   if(!dest){alert('Pick a destination first (the cleaned list is saved to that Drive folder).');return;}
   if(!project){alert('Enter a project name (used as the Drive file name).');return;}
   const colv=$('#s-col').value;
-  btn.disabled=true;btn.innerHTML='<span class="spin"></span>Scrubbing...';
+  const orgLabel=($('#s-org').selectedOptions[0]||{}).textContent||org;
+  btn.disabled=true;btn.textContent='Working...';
+  $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
   // 1) Scrub (stats)
   let d;
   try{
+    sProg('Reading file...');
     const up=await toUploadFile(f);
     const fd=new FormData();fd.append('org',org);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
+    sProg('Scrubbing against opt-outs for '+orgLabel+'...');
     const r=await fetch('/api/scrub',{method:'POST',body:fd});d=await r.json();
-  }catch(e){btn.innerHTML='Scrub list';btn.disabled=false;alert('Error: '+e.message);return;}
-  if(d.error){btn.innerHTML='Scrub list';btn.disabled=false;alert('Error: '+d.error);return;}
+  }catch(e){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Error: '+e.message);return;}
+  if(d.error){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Error: '+d.error);return;}
+  sProg('Scrubbed against '+d.optOutSetSize.toLocaleString()+' opt-outs for '+orgLabel+'. Rendering results...');
   $('#r-file').textContent=d.inputFile;$('#r-org').textContent=d.org;
   $('#r-col').textContent=d.phoneColumn+(d.autoDetected?' (auto)':' (manual)');
   $('#r-in').textContent=d.inputRows.toLocaleString();
@@ -557,29 +568,32 @@ $('#s-run').onclick=async()=>{
   if(d.unparseablePhones>0){u.classList.remove('hide');u.textContent=d.unparseablePhones.toLocaleString()+' rows had unreadable phone numbers and were kept (not scrubbed). Check the phone column.';}
   else u.classList.add('hide');
   $('#s-result').classList.remove('hide');
-  // 2) Download cleaned CSV (fires automatically)
-  btn.innerHTML='<span class="spin"></span>Saving...';
   const dlName=project.replace(/\.csv$/i,'')+'_scrubbed.csv';
   let dlLine,drLine;
+  // 2) Save a copy to Drive
   try{
-    const up=await toUploadFile(f);
-    const fd=new FormData();fd.append('org',org);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
-    const b=await (await fetch('/api/scrub?download=1',{method:'POST',body:fd})).blob();
-    const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=dlName;a.click();
-    dlLine='<span class="ok">\u2713 Downloaded</span> <b>'+dlName+'</b>';
-  }catch(e){dlLine='<span class="bad">\u2715 Download failed</span> <span class="muted">('+e.message+')</span>';}
-  // 3) Save a copy to Drive
-  try{
+    sProg('Saving to '+(dest==='bigdog'?'Big Dog':'Creative Direct')+' Google Drive...');
     const up2=await toUploadFile(f);
     const fd2=new FormData();fd2.append('org',org);fd2.append('dest',dest);fd2.append('project',project);fd2.append('file',up2);if(colv!=='')fd2.append('phoneCol',colv);
     const dr=await jsonFetch('/api/scrub/drive',{method:'POST',body:fd2});
     if(dr.error){drLine='<span class="bad">\u2715 Drive save failed</span> <span class="muted">('+dr.error+')</span>';}
     else{drLine='<span class="ok">\u2713 Saved to '+dr.destinationLabel+' Drive</span> <span class="muted">as '+dr.driveFileName+'</span>';}
   }catch(e){drLine='<span class="bad">\u2715 Drive save failed</span> <span class="muted">('+e.message+')</span>';}
-  $('#s-drive-msg').innerHTML='<div>'+dlLine+'</div><div>'+drLine+'</div>';
+  // 3) Download cleaned CSV (fires automatically)
+  try{
+    sProg('Downloading cleaned list...');
+    const up=await toUploadFile(f);
+    const fd=new FormData();fd.append('org',org);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
+    const b=await (await fetch('/api/scrub?download=1',{method:'POST',body:fd})).blob();
+    const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=dlName;a.click();
+    dlLine='<span class="ok">\u2713 Downloaded</span> <b>'+dlName+'</b>';
+  }catch(e){dlLine='<span class="bad">\u2715 Download failed</span> <span class="muted">('+e.message+')</span>';}
+  // Progress line disappears; green checks take its place
+  sProgDone();
+  $('#s-drive-msg').innerHTML='<div>'+drLine+'</div><div>'+dlLine+'</div>';
   $('#s-drive-msg').classList.remove('hide');
   // Button becomes a neutral "Scrub another"
-  btn.innerHTML='Scrub another';btn.classList.add('ghost');btn.disabled=false;sMode='again';
+  btn.textContent='Scrub another';btn.classList.add('ghost');btn.disabled=false;sMode='again';
   $('#s-result').scrollIntoView({behavior:'smooth'});
 };
 

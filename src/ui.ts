@@ -511,10 +511,10 @@ async function sBuildKeep(){
       const wb=XLSX.read(new Uint8Array(buf),{type:'array',sheetRows:1});
       const sheet=wb.Sheets[wb.SheetNames[0]];
       const csv=XLSX.utils.sheet_to_csv(sheet);
-      cols=splitCsvClient((csv.split(/\r?\n/)[0])||'');
+      cols=splitCsvClient((csv.split(/\\r?\\n/)[0])||'');
     }else{
       const txt=await f.slice(0,64*1024).text();
-      cols=splitCsvClient((txt.split(/\r?\n/)[0])||'');
+      cols=splitCsvClient((txt.split(/\\r?\\n/)[0])||'');
     }
   }catch(e){wrap.classList.add('hide');return;}
   sHeaderCols=cols;
@@ -650,9 +650,9 @@ async function streamScrub(url,body,onProgress){
   for(;;){
     const {value,done}=await reader.read();
     if(done)break;
-    buf+=value;let nl=buf.indexOf('\n');
+    buf+=value;let nl=buf.indexOf('\\n');
     while(nl>=0){
-      const line=buf.slice(0,nl).trim();buf=buf.slice(nl+1);nl=buf.indexOf('\n');
+      const line=buf.slice(0,nl).trim();buf=buf.slice(nl+1);nl=buf.indexOf('\\n');
       if(!line)continue;
       let obj;try{obj=JSON.parse(line);}catch(e){continue;}
       if(obj.progress&&onProgress)onProgress(obj.progress);

@@ -89,7 +89,8 @@ export async function driveList(env: Env, folderId: string): Promise<DriveFile[]
   const q = encodeURIComponent(`'${folderId}' in parents and trashed = false`);
   const url =
     `https://www.googleapis.com/drive/v3/files?q=${q}` +
-    `&fields=files(id,name,mimeType,modifiedTime,size,webViewLink)&orderBy=name`;
+    `&fields=files(id,name,mimeType,modifiedTime,size,webViewLink)&orderBy=name` +
+    `&supportsAllDrives=true&includeItemsFromAllDrives=true&corpora=allDrives`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
   if (!res.ok) throw new Error(`Drive list error: ${res.status} ${await res.text()}`);
   return ((await res.json()) as { files: DriveFile[] }).files || [];
@@ -117,7 +118,7 @@ export async function driveUploadCsv(
     csv +
     `\r\n--${boundary}--`;
   const res = await fetch(
-    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name',
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name&supportsAllDrives=true',
     {
       method: 'POST',
       headers: {

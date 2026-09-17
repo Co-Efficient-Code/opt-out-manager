@@ -251,7 +251,8 @@ api.post('/scrub/drive', async (c) => {
   }
   try {
     const result = await scrubContacts(c.env, org, csv, phoneCol);
-    const fileName = project.endsWith('.csv') ? project : `${project}.csv`;
+    const base = project.replace(/\.csv$/i, '');
+    const fileName = `${base}_scrubbed.csv`;
     const saved = await driveUploadCsv(
       c.env,
       driveFolderFor(c.env, dest as DriveDest),

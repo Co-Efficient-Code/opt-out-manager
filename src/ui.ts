@@ -41,6 +41,9 @@ label{display:block;color:var(--muted);font-size:13px;margin:14px 0 6px;font-wei
 select,input[type=file]{width:100%;background:#0a1628;border:1px solid var(--border);color:var(--text);padding:11px 12px;border-radius:8px;font-family:inherit;font-size:14px}
 .drop{border:2px dashed var(--border);border-radius:10px;padding:26px;text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
 .drop.hot{border-color:var(--accent);color:var(--text);background:#0c1d38}
+.drop.filled{border-style:solid;border-color:#1f9d55;color:var(--text);background:#0d2a1a;cursor:default}
+.drop.filled .s-drop-name{font-weight:600}
+.drop.filled .s-drop-change{display:inline-block;margin-top:6px;font-size:12px;color:var(--muted);cursor:pointer;text-decoration:underline}
 .btn{background:var(--accent);color:#fff;border:none;padding:12px 22px;border-radius:8px;font-weight:600;cursor:pointer;font-family:'Inter';font-size:14px}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn.ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
@@ -158,15 +161,15 @@ th{color:var(--muted);font-weight:600}
       <label>Project name</label>
       <input type="text" id="s-project" placeholder="261187 NH Senate Big Dog SAG MMS 9.16" style="width:100%;background:#0a1628;border:1px solid var(--border);color:var(--text);padding:11px 12px;border-radius:8px;font-family:inherit;font-size:14px">
       <label>Contact list (CSV or Excel)</label>
-      <div class="drop" id="s-drop">Drop a CSV or Excel file here or click to choose<input type="file" id="s-file" accept=".csv,.xlsx,.xls" class="hide"></div>
+      <div class="drop" id="s-drop"><span id="s-drop-text">Drop a CSV or Excel file here or click to choose</span><input type="file" id="s-file" accept=".csv,.xlsx,.xls" class="hide"></div>
       <div id="s-colwrap" class="hide">
         <label>Phone column <span class="muted" style="font-weight:400">(auto-detected, override if needed)</span></label>
         <select id="s-col"><option value="">Auto-detect</option></select>
       </div>
       <div class="row" style="margin-top:16px">
         <button class="btn" id="s-run" disabled>Scrub list</button>
-        <span id="s-fname" class="muted"></span>
       </div>
+      <div class="note hide" id="s-drive-msg" style="margin-top:12px"></div>
     </div>
     <div class="card hide" id="s-result">
       <h2>Results</h2>
@@ -182,11 +185,6 @@ th{color:var(--muted);font-weight:600}
         <div class="stat"><div class="n" id="r-set">0</div><div class="l">PAC opt-out list size</div></div>
       </div>
       <div class="note hide" id="r-unparse"></div>
-      <div class="row" style="margin-top:18px">
-        <button class="btn" id="s-dl">Download & save to Drive</button>
-        <button class="btn ghost" id="s-reset">Scrub another</button>
-      </div>
-      <div class="note hide" id="s-drive-msg" style="margin-top:12px"></div>
     </div>
   </div>
 
@@ -424,7 +422,7 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
   }
   $(orgId).addEventListener('change',onpick);
   if(destId)$(destId).addEventListener('change',onpick);
-  const opts={file,colwrap:null,col:null};
+  const opts={file,colwrap:null,col:null,onpick,drop};
   function populateCols(f){
     // Column preview only works for text CSV; skip for Excel (binary).
     const nm=(f.name||'').toLowerCase();
@@ -446,8 +444,25 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
 // client-side CSV header split + phone guess (mirror of server logic)
 function splitCsvClient(line){const out=[];let cur='',q=false;for(let i=0;i<line.length;i++){const ch=line[i];if(q){if(ch==='"'&&line[i+1]==='"'){cur+='"';i++;}else if(ch==='"')q=false;else cur+=ch;}else{if(ch==='"')q=true;else if(ch===','){out.push(cur);cur='';}else cur+=ch;}}out.push(cur);return out;}
 function guessPhoneCol(header){const n=header.map(h=>h.trim().toLowerCase());const c=['phone','phone number','phonenumber','cell','mobile','phone_number'];for(const x of c){const i=n.indexOf(x);if(i>=0)return i;}return n.findIndex(h=>h.includes('phone'));}
-const s=wireDrop('#s-drop','#s-file','#s-fname','#s-run','#s-org');
+const s=wireDrop('#s-drop','#s-file',null,'#s-run','#s-org','#s-dest');
 s.colwrap='#s-colwrap';s.col='#s-col';
+// Scrub drop zone: go green + show file name inside the zone once a file is chosen.
+// Keeps the <input> element stable (no innerHTML swap) so wireDrop bindings survive.
+function sFileUI(){
+  const f=s.file.files[0];const drop=$('#s-drop');const txt=$('#s-drop-text');
+  if(f){
+    drop.classList.add('filled');
+    txt.innerHTML='<div class="s-drop-name"></div><div class="s-drop-change">Change file</div>';
+    txt.querySelector('.s-drop-name').textContent=f.name;
+    txt.querySelector('.s-drop-change').onclick=(e)=>{e.stopPropagation();s.file.value='';s.onpick();sFileUI();};
+  }else{
+    drop.classList.remove('filled');
+    txt.textContent='Drop a CSV or Excel file here or click to choose';
+  }
+}
+// Filled zone should not re-open the picker on body click (only the Change link handles it).
+$('#s-drop').onclick=(e)=>{if($('#s-drop').classList.contains('filled'))return;s.file.click();};
+s.file.addEventListener('change',sFileUI);
 const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org','#p-dest');
 // Show file row + hide drop zone once a file is chosen; restore on "Change file".
 function pFileUI(){
@@ -496,19 +511,34 @@ async function autoPreview(){
   previewOk=true;$('#p-run').disabled=false;
 }
 
-// scrub
+// scrub: one click = scrub + download + save to Drive. Button then becomes "Scrub another".
+let sMode='scrub'; // 'scrub' | 'again'
+function sResetForm(){
+  s.file.value='';sFileUI();
+  $('#s-result').classList.add('hide');
+  $('#s-colwrap').classList.add('hide');
+  $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
+  const btn=$('#s-run');btn.textContent='Scrub list';btn.disabled=true;
+  sMode='scrub';
+  s.onpick();
+}
 $('#s-run').onclick=async()=>{
-  const btn=$('#s-run');const org=$('#s-org').value;const f=s.file.files[0];
+  const btn=$('#s-run');
+  if(sMode==='again'){sResetForm();return;}
+  const org=$('#s-org').value;const f=s.file.files[0];
+  const dest=$('#s-dest').value;const project=$('#s-project').value.trim();
+  if(!dest){alert('Pick a destination first (the cleaned list is saved to that Drive folder).');return;}
+  if(!project){alert('Enter a project name (used as the Drive file name).');return;}
+  const colv=$('#s-col').value;
   btn.disabled=true;btn.innerHTML='<span class="spin"></span>Scrubbing...';
+  // 1) Scrub (stats)
   let d;
   try{
     const up=await toUploadFile(f);
-    const fd=new FormData();fd.append('org',org);fd.append('file',up);
-    const colv=$('#s-col').value;if(colv!=='')fd.append('phoneCol',colv);
+    const fd=new FormData();fd.append('org',org);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
     const r=await fetch('/api/scrub',{method:'POST',body:fd});d=await r.json();
   }catch(e){btn.innerHTML='Scrub list';btn.disabled=false;alert('Error: '+e.message);return;}
-  btn.innerHTML='Scrub list';btn.disabled=false;
-  if(d.error){alert('Error: '+d.error);return;}
+  if(d.error){btn.innerHTML='Scrub list';btn.disabled=false;alert('Error: '+d.error);return;}
   $('#r-file').textContent=d.inputFile;$('#r-org').textContent=d.org;
   $('#r-col').textContent=d.phoneColumn+(d.autoDetected?' (auto)':' (manual)');
   $('#r-in').textContent=d.inputRows.toLocaleString();
@@ -519,35 +549,28 @@ $('#s-run').onclick=async()=>{
   if(d.unparseablePhones>0){u.classList.remove('hide');u.textContent=d.unparseablePhones.toLocaleString()+' rows had unreadable phone numbers and were kept (not scrubbed). Check the phone column.';}
   else u.classList.add('hide');
   $('#s-result').classList.remove('hide');
-  $('#s-result').scrollIntoView({behavior:'smooth'});
-};
-$('#s-dl').onclick=async()=>{
-  const org=$('#s-org').value;const f=s.file.files[0];
-  const dest=$('#s-dest').value;const project=$('#s-project').value.trim();
-  if(!dest){alert('Pick a destination before downloading (the cleaned list is also saved to that Drive folder).');return;}
-  if(!project){alert('Enter a project name (used as the Drive file name).');return;}
-  const btn=$('#s-dl');btn.disabled=true;btn.innerHTML='<span class="spin"></span>Saving...';
-  const colv=$('#s-col').value;
-  // 1) Download the cleaned CSV to the user
+  // 2) Download cleaned CSV (fires automatically)
+  btn.innerHTML='<span class="spin"></span>Saving...';
+  const dlName=project.replace(/\.csv$/i,'')+'_scrubbed.csv';
   try{
     const up=await toUploadFile(f);
     const fd=new FormData();fd.append('org',org);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
     const b=await (await fetch('/api/scrub?download=1',{method:'POST',body:fd})).blob();
-    const a=document.createElement('a');a.href=URL.createObjectURL(b);
-    a.download=(project.endsWith('.csv')?project:project+'.csv');a.click();
-  }catch(e){btn.disabled=false;btn.innerHTML='Download & save to Drive';alert('Download failed: '+e.message);return;}
-  // 2) Save a copy to the destination Drive folder
+    const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=dlName;a.click();
+  }catch(e){/* keep going to Drive; report below */}
+  // 3) Save a copy to Drive
   try{
     const up2=await toUploadFile(f);
     const fd2=new FormData();fd2.append('org',org);fd2.append('dest',dest);fd2.append('project',project);fd2.append('file',up2);if(colv!=='')fd2.append('phoneCol',colv);
     const dr=await jsonFetch('/api/scrub/drive',{method:'POST',body:fd2});
-    if(dr.error){$('#s-drive-msg').innerHTML='<span class="muted">Saved locally, but Drive save failed: '+dr.error+'</span>';}
-    else{$('#s-drive-msg').innerHTML='Saved to <b>'+dr.destinationLabel+'</b> Drive folder as <b>'+dr.driveFileName+'</b>.';}
+    if(dr.error){$('#s-drive-msg').innerHTML='<span class="muted">Downloaded locally, but Drive save failed: '+dr.error+'</span>';}
+    else{$('#s-drive-msg').innerHTML='Downloaded as <b>'+dlName+'</b> and saved to <b>'+dr.destinationLabel+'</b> Drive folder as <b>'+dr.driveFileName+'</b>.';}
     $('#s-drive-msg').classList.remove('hide');
-  }catch(e){$('#s-drive-msg').classList.remove('hide');$('#s-drive-msg').innerHTML='<span class="muted">Saved locally, but Drive save failed: '+e.message+'</span>';}
-  btn.disabled=false;btn.innerHTML='Download & save to Drive';
+  }catch(e){$('#s-drive-msg').classList.remove('hide');$('#s-drive-msg').innerHTML='<span class="muted">Downloaded locally, but Drive save failed: '+e.message+'</span>';}
+  // Button becomes "Scrub another"
+  btn.innerHTML='Scrub another';btn.disabled=false;sMode='again';
+  $('#s-result').scrollIntoView({behavior:'smooth'});
 };
-$('#s-reset').onclick=()=>{$('#s-result').classList.add('hide');s.file.value='';$('#s-fname').textContent='';$('#s-run').disabled=true;$('#s-colwrap').classList.add('hide');};
 
 // push (requires successful preview first)
 $('#p-run').onclick=async()=>{

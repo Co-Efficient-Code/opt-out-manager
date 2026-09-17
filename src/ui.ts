@@ -56,6 +56,11 @@ select,input[type=file]{width:100%;background:#0a1628;border:1px solid var(--bor
 .meta{display:flex;gap:20px;flex-wrap:wrap;color:var(--muted);font-size:13px;margin:10px 0 0}
 .meta b{color:var(--text)}
 .note{background:#1a1206;border:1px solid #5a3a12;color:#f3c99a;padding:12px 14px;border-radius:8px;font-size:13px;margin-top:14px}
+.sstatus{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
+.sstatus .ok{color:#4ade80}
+.sstatus .bad{color:#f3c99a}
+.sstatus b{color:var(--text);font-weight:600}
+.srow{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:18px}
 .muted{color:var(--muted)} .hide{display:none}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes s{to{transform:rotate(360deg)}}
@@ -166,10 +171,10 @@ th{color:var(--muted);font-weight:600}
         <label>Phone column <span class="muted" style="font-weight:400">(auto-detected, override if needed)</span></label>
         <select id="s-col"><option value="">Auto-detect</option></select>
       </div>
-      <div class="row" style="margin-top:16px">
+      <div class="srow">
         <button class="btn" id="s-run" disabled>Scrub list</button>
+        <div class="sstatus hide" id="s-drive-msg"></div>
       </div>
-      <div class="note hide" id="s-drive-msg" style="margin-top:12px"></div>
     </div>
     <div class="card hide" id="s-result">
       <h2>Results</h2>
@@ -419,10 +424,11 @@ function wireDrop(dropId,fileId,fnameId,btnId,orgId,destId){
     var b=$(btnId);if(b)b.disabled=!ready;
     if(f&&opts.colwrap)populateCols(f);
     if(opts.onReady)opts.onReady(ready);
+    if(opts.afterPick)opts.afterPick();
   }
   $(orgId).addEventListener('change',onpick);
   if(destId)$(destId).addEventListener('change',onpick);
-  const opts={file,colwrap:null,col:null,onpick,drop};
+  const opts={file,colwrap:null,col:null,onpick,drop,afterPick:null};
   function populateCols(f){
     // Column preview only works for text CSV; skip for Excel (binary).
     const nm=(f.name||'').toLowerCase();
@@ -461,8 +467,10 @@ function sFileUI(){
   }
 }
 // Filled zone should not re-open the picker on body click (only the Change link handles it).
-$('#s-drop').onclick=(e)=>{if($('#s-drop').classList.contains('filled'))return;s.file.click();};
-s.file.addEventListener('change',sFileUI);
+// wireDrop already handles click-to-open + drag/drop; we only block re-open when filled.
+s.afterPick=sFileUI;
+const _sDropClick=$('#s-drop').onclick;
+$('#s-drop').onclick=(e)=>{if($('#s-drop').classList.contains('filled'))return;if(_sDropClick)_sDropClick.call($('#s-drop'),e);else s.file.click();};
 const p=wireDrop('#p-drop','#p-file','#p-fname','#p-run','#p-org','#p-dest');
 // Show file row + hide drop zone once a file is chosen; restore on "Change file".
 function pFileUI(){
@@ -518,7 +526,7 @@ function sResetForm(){
   $('#s-result').classList.add('hide');
   $('#s-colwrap').classList.add('hide');
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
-  const btn=$('#s-run');btn.textContent='Scrub list';btn.disabled=true;
+  const btn=$('#s-run');btn.textContent='Scrub list';btn.classList.remove('ghost');btn.disabled=true;
   sMode='scrub';
   s.onpick();
 }
@@ -552,23 +560,26 @@ $('#s-run').onclick=async()=>{
   // 2) Download cleaned CSV (fires automatically)
   btn.innerHTML='<span class="spin"></span>Saving...';
   const dlName=project.replace(/\.csv$/i,'')+'_scrubbed.csv';
+  let dlLine,drLine;
   try{
     const up=await toUploadFile(f);
     const fd=new FormData();fd.append('org',org);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
     const b=await (await fetch('/api/scrub?download=1',{method:'POST',body:fd})).blob();
     const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download=dlName;a.click();
-  }catch(e){/* keep going to Drive; report below */}
+    dlLine='<span class="ok">\u2713 Downloaded</span> <b>'+dlName+'</b>';
+  }catch(e){dlLine='<span class="bad">\u2715 Download failed</span> <span class="muted">('+e.message+')</span>';}
   // 3) Save a copy to Drive
   try{
     const up2=await toUploadFile(f);
     const fd2=new FormData();fd2.append('org',org);fd2.append('dest',dest);fd2.append('project',project);fd2.append('file',up2);if(colv!=='')fd2.append('phoneCol',colv);
     const dr=await jsonFetch('/api/scrub/drive',{method:'POST',body:fd2});
-    if(dr.error){$('#s-drive-msg').innerHTML='<span class="muted">Downloaded locally, but Drive save failed: '+dr.error+'</span>';}
-    else{$('#s-drive-msg').innerHTML='Downloaded as <b>'+dlName+'</b> and saved to <b>'+dr.destinationLabel+'</b> Drive folder as <b>'+dr.driveFileName+'</b>.';}
-    $('#s-drive-msg').classList.remove('hide');
-  }catch(e){$('#s-drive-msg').classList.remove('hide');$('#s-drive-msg').innerHTML='<span class="muted">Downloaded locally, but Drive save failed: '+e.message+'</span>';}
-  // Button becomes "Scrub another"
-  btn.innerHTML='Scrub another';btn.disabled=false;sMode='again';
+    if(dr.error){drLine='<span class="bad">\u2715 Drive save failed</span> <span class="muted">('+dr.error+')</span>';}
+    else{drLine='<span class="ok">\u2713 Saved to '+dr.destinationLabel+' Drive</span> <span class="muted">as '+dr.driveFileName+'</span>';}
+  }catch(e){drLine='<span class="bad">\u2715 Drive save failed</span> <span class="muted">('+e.message+')</span>';}
+  $('#s-drive-msg').innerHTML='<div>'+dlLine+'</div><div>'+drLine+'</div>';
+  $('#s-drive-msg').classList.remove('hide');
+  // Button becomes a neutral "Scrub another"
+  btn.innerHTML='Scrub another';btn.classList.add('ghost');btn.disabled=false;sMode='again';
   $('#s-result').scrollIntoView({behavior:'smooth'});
 };
 

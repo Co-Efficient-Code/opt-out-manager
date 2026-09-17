@@ -3,7 +3,7 @@ import type { Env, SessionUser } from './types';
 import { authRoutes, requireAuth } from './auth';
 import { listAccounts, listAccountsForRole, filesForOrg, listFilesForRole } from './accounts';
 import type { SyncRole } from './s3';
-import { scrubContacts, buildOptOutSet, normalizeOptOutCsv } from './scrub';
+import { scrubContacts, scrubContactsStreaming, buildOptOutSet, normalizeOptOutCsv } from './scrub';
 import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv } from './parsefile';
 import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
@@ -243,17 +243,19 @@ api.post('/scrub/drive', async (c) => {
   if (!destMap[dest]) return c.json({ error: 'missing or invalid destination' }, 400);
   if (!project) return c.json({ error: 'missing project name' }, 400);
   if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
-  let csv: string;
-  try {
-    csv = await fileToCsv(file);
-  } catch (e) {
-    return c.json({ error: e instanceof Error ? e.message : String(e) }, 400);
-  }
-  // Scrub once. Drive save is best-effort: if it fails (e.g. Drive perms),
-  // still return stats + cleaned CSV so the user can download.
+  // Stream the scrub to keep memory bounded on large lists (100k+ rows).
+  // XLSX uploads are pre-converted to CSV in the browser; if a raw spreadsheet
+  // is posted directly, fall back to the buffered converter for that case only.
+  const nm = (file.name || '').toLowerCase();
+  const isSpreadsheet = nm.endsWith('.xlsx') || nm.endsWith('.xls');
   let result;
   try {
-    result = await scrubContacts(c.env, org, csv, phoneCol);
+    if (isSpreadsheet) {
+      const csv = await fileToCsv(file);
+      result = await scrubContacts(c.env, org, csv, phoneCol);
+    } else {
+      result = await scrubContactsStreaming(c.env, org, file.stream(), phoneCol);
+    }
   } catch (e) {
     return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
   }

@@ -4,6 +4,11 @@ compatibility_date = "2025-09-15"
 compatibility_flags = ["nodejs_compat"]
 account_id = "b487aa8136a1989c0718b148ecb02522"
 
+# Raise CPU limit for large-file scrubs (100k+ row CSVs). Default is 30s CPU;
+# big lists (15MB / ~100k rows) plus building the opt-out set exceed it -> 503.
+[limits]
+cpu_ms = 300000
+
 # Shared, non-secret vars. Secrets are set via `wrangler secret put --env <env>`.
 [vars]
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
@@ -22,6 +27,9 @@ routes = [
 # Project -> (pac, destination) mapping overrides (human-assigned). Survives
 # across sessions/runs. Scrubbing/opt-out reads still come from S3 (read-only);
 # this KV only holds user-assigned project mappings.
+[env.staging.limits]
+cpu_ms = 300000
+
 [[env.staging.kv_namespaces]]
 binding = "OPTOUT_MAPPING"
 id = "c5678d4a97bd41f9b15feedabe68926c"
@@ -53,6 +61,9 @@ routes = [
 
 # Project -> (pac, destination) mapping overrides (human-assigned). SEPARATE
 # prod namespace so prod mappings never mix with staging test data.
+[env.production.limits]
+cpu_ms = 300000
+
 [[env.production.kv_namespaces]]
 binding = "OPTOUT_MAPPING"
 id = "c8cf8d1469094946beb41e22b77c22bd"

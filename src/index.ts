@@ -9,7 +9,7 @@ import { fileToCsv } from './parsefile';
 import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
 
 import { loadOverrides, setOverride, PAC_SLUGS, DESTINATIONS } from './mapping';
-import { loadRunHistory } from './runhistory';
+import { loadRunHistory, loadLastRunLog } from './runhistory';
 import { runOptOutSync } from './runner';
 import { renderApp } from './ui';
 
@@ -444,6 +444,17 @@ api.get('/runlogs/dry-run', async (c) => {
       'X-Accel-Buffering': 'no',
     },
   });
+});
+
+// LAST RUN: full log of the most recent completed run. Used by the UI to
+// silently recover the result if the live stream drops mid-run.
+api.get('/runlogs/last', async (c) => {
+  try {
+    const last = await loadLastRunLog(c.env);
+    return c.json({ ok: true, last });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
 });
 
 // RUN HISTORY: compact record of past pulls (when + counts + email outcome).

@@ -2,7 +2,7 @@ import type { Env } from './types';
 import { pullOptOuts, MAGA_CLIENT } from './rgop';
 import { buildRunLog, buildRunEmail, type RunLog } from './runlogs';
 import { sendEmail } from './email';
-import { appendRunRecord, recordFromRun } from './runhistory';
+import { appendRunRecord, recordFromRun, saveLastRunLog } from './runhistory';
 
 /**
  * Shared opt-out sync run, used by BOTH the interactive button (streaming) and
@@ -73,12 +73,14 @@ export async function runOptOutSync(env: Env, opts: RunOptions): Promise<RunResu
     await prog('email', `Email failed (run still OK): ${email.error}`);
   }
 
-  // Persist run record. Best-effort.
+  // Persist run record + full last log. Best-effort. The full log lets the UI
+  // silently recover the complete result if the live stream drops mid-run.
   try {
     await appendRunRecord(
       env,
       recordFromRun(log, email, false, opts.triggeredBy, opts.triggeredByName),
     );
+    await saveLastRunLog(env, { log, email });
   } catch (e) {
     await prog('history', `Run-history save failed (run still OK): ${e instanceof Error ? e.message : String(e)}`);
   }

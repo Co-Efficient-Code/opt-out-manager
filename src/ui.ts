@@ -87,9 +87,6 @@ th{color:var(--muted);font-weight:600}
 .assign .asg-pac,.assign .asg-dest{width:100%}
 .assign .asg-save{flex:0 0 auto}
 .assign .asg-msg{flex:0 0 auto}
-.rl-progress{margin-top:14px;max-height:180px;overflow-y:auto;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:10px 12px;font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.6}
-.rl-progress .rl-pline{color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.rl-progress .rl-pline.ok{color:#4ade80}
 .htable{width:100%}
 /* All tables stay within their card: never exceed the container width. */
 .card table{max-width:100%}
@@ -201,7 +198,6 @@ th{color:var(--muted);font-weight:600}
         <button class="btn" id="rl-run">Refresh Optouts</button>
         <span id="rl-status" class="muted"></span>
       </div>
-      <div id="rl-progress" class="rl-progress hide"></div>
       <div id="rl-summary" class="hide">
         <div class="meta" id="rl-meta" style="margin-top:16px"></div>
         <div class="stats" id="rl-stats" style="margin-top:12px"></div>
@@ -648,23 +644,17 @@ function wireAssigns(root){
 }
 $('#rl-run').onclick=loadRunlogs;
 async function loadRunlogs(){
-  const btn=$('#rl-run');const st=$('#rl-status');const prog=$('#rl-progress');
+  const btn=$('#rl-run');const st=$('#rl-status');
+  const startedAt=Date.now();
   btn.disabled=true;st.innerHTML='<span class="spin"></span>Refreshing optouts...';
-  prog.classList.remove('hide');prog.innerHTML='';
   ['#rl-summary','#rl-groups-card','#rl-quar-card','#rl-proj-card'].forEach(id=>$(id).classList.add('hide'));
-  // Stream NDJSON progress from the full pull so the user can watch it work.
+  // Single updating status line (spinner) streams live progress. If the stream
+  // drops, we silently recover by polling the last saved run - no error shown.
   let d=null;
-  function logLine(msg,cls){
-    var el=document.createElement('div');
-    el.className='rl-pline'+(cls?' '+cls:'');
-    el.textContent=msg;
-    prog.appendChild(el);
-    prog.scrollTop=prog.scrollHeight;
-  }
   try{
     const r=await fetch('/api/runlogs/dry-run');
     if(r.redirected && r.url.indexOf('/auth/login')>=0){window.location.href='/auth/login';return;}
-    if(!r.body)throw new Error('No response stream');
+    if(!r.body)throw new Error('no stream');
     const reader=r.body.getReader();const dec=new TextDecoder();let buf='';
     while(true){
       const {value,done}=await reader.read();
@@ -677,22 +667,42 @@ async function loadRunlogs(){
         let ev;try{ev=JSON.parse(line);}catch(e){continue;}
         if(ev.type==='progress'){
           st.innerHTML='<span class="spin"></span>'+(ev.message||'Working...');
-          logLine(ev.message||'');
-        }else if(ev.type==='error'){
-          throw new Error(ev.error||'unknown error');
         }else if(ev.type==='done'){
           d=ev;
-          if(ev.email&&ev.email.sent)logLine('Summary email sent to jacob@coefficient.org','ok');
-          else if(ev.email&&ev.email.error)logLine('Email failed (run still OK): '+ev.email.error);
-          logLine('Done.','ok');
         }
+        // ev.type==='error' falls through to silent recovery below.
       }
     }
-  }catch(e){st.textContent='Failed: '+e.message;btn.disabled=false;return;}
+  }catch(e){/* stream dropped - fall through to silent recovery */}
+  // If we did not get a clean done event, recover silently: poll for the last
+  // saved run newer than when we started. No mention of any failure.
+  if(!d||!d.ok||!d.log){
+    st.innerHTML='<span class="spin"></span>Refreshing optouts...';
+    d=await recoverLastRun(startedAt);
+  }
   btn.disabled=false;
-  if(!d||!d.ok||d.error){st.textContent='Failed: '+((d&&d.error)||'no result returned');return;}
+  if(!d||!d.log){st.textContent='';return;} // give up quietly; history is source of truth
   st.textContent='';
-  const g=d.log;
+  renderRunResult(d.log);
+}
+// Poll the last-saved run until one appears that is newer than startedAt.
+async function recoverLastRun(startedAt){
+  const deadline=startedAt+180000; // 3 min ceiling; a run takes ~80s
+  while(Date.now()<deadline){
+    try{
+      const r=await jsonFetch('/api/runlogs/last');
+      const last=r&&r.last;
+      if(last&&last.log&&last.log.ranAt&&(new Date(last.log.ranAt).getTime()>=startedAt-5000)){
+        return {ok:true,log:last.log,email:last.email};
+      }
+    }catch(e){}
+    await new Promise(res=>setTimeout(res,4000));
+  }
+  return null;
+}
+async function renderRunResult(g){
+  // load canonical option lists for assign dropdowns (once)
+  try{var m=await jsonFetch('/api/mapping');rlPacs=m.pacSlugs||[];rlDests=m.destinations||[];}catch(e){}
   // load canonical option lists for assign dropdowns (once)
   try{var m=await jsonFetch('/api/mapping');rlPacs=m.pacSlugs||[];rlDests=m.destinations||[];}catch(e){}
   const newTotal=g.groups.reduce((s,x)=>s+x.newCount,0);

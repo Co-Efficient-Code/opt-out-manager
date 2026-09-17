@@ -74,3 +74,27 @@ export async function appendRunRecord(env: Env, rec: RunRecord): Promise<void> {
   const trimmed = history.slice(0, MAX_RUNS);
   await env.OPTOUT_MAPPING.put(KEY, JSON.stringify(trimmed));
 }
+
+// Full last-run log + email outcome, so the UI can recover the complete result
+// (not just counts) if the live stream drops mid-run. One key, overwritten each
+// run. Best-effort.
+const LAST_LOG_KEY = 'last_run_log';
+
+export async function saveLastRunLog(
+  env: Env,
+  payload: { log: unknown; email: { sent: boolean; error?: string } },
+): Promise<void> {
+  if (!env.OPTOUT_MAPPING) return;
+  await env.OPTOUT_MAPPING.put(LAST_LOG_KEY, JSON.stringify(payload));
+}
+
+export async function loadLastRunLog(env: Env): Promise<unknown | null> {
+  if (!env.OPTOUT_MAPPING) return null;
+  const raw = await env.OPTOUT_MAPPING.get(LAST_LOG_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}

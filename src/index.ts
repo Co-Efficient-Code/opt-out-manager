@@ -243,60 +243,88 @@ api.post('/scrub/drive', async (c) => {
   if (!destMap[dest]) return c.json({ error: 'missing or invalid destination' }, 400);
   if (!project) return c.json({ error: 'missing project name' }, 400);
   if (!(file instanceof File)) return c.json({ error: 'missing file' }, 400);
-  // Stream the scrub to keep memory bounded on large lists (100k+ rows).
-  // XLSX uploads are pre-converted to CSV in the browser; if a raw spreadsheet
-  // is posted directly, fall back to the buffered converter for that case only.
+  // Optional column trim: comma-separated header names to keep.
+  const keepRaw = String(form.get('keepColumns') || '').trim();
+  const keepColumns = keepRaw ? keepRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
   const nm = (file.name || '').toLowerCase();
   const isSpreadsheet = nm.endsWith('.xlsx') || nm.endsWith('.xls');
-  let result;
-  try {
-    if (isSpreadsheet) {
-      const csv = await fileToCsv(file);
-      result = await scrubContacts(c.env, org, csv, phoneCol);
-    } else {
-      result = await scrubContactsStreaming(c.env, org, file.stream(), phoneCol);
-    }
-  } catch (e) {
-    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
-  }
   const base = project.replace(/\.csv$/i, '');
   const fileName = `${base}_scrubbed.csv`;
-  let driveOk = false;
-  let driveFileName: string | undefined;
-  let driveFileId: string | undefined;
-  let driveError: string | undefined;
-  try {
-    const saved = await driveUploadCsv(
-      c.env,
-      driveFolderFor(c.env, dest as DriveDest),
-      fileName,
-      result.cleanedCsv,
-    );
-    driveOk = true;
-    driveFileName = saved.name;
-    driveFileId = saved.id;
-  } catch (e) {
-    driveError = e instanceof Error ? e.message : String(e);
-  }
-  return c.json({
-    ok: true,
-    org,
-    inputFile: file.name,
-    destinationLabel: destMap[dest],
-    driveOk,
-    driveFileName,
-    driveFileId,
-    driveError,
-    downloadName: fileName,
-    cleanedCsv: result.cleanedCsv,
-    inputRows: result.inputRows,
-    phoneColumn: result.phoneColumn,
-    phoneColumnIndex: result.phoneColumnIndex,
-    autoDetected: result.autoDetected,
-    scrubbed: result.scrubbed,
-    kept: result.kept,
-    optOutSetSize: result.optOutSetSize,
-    unparseablePhones: result.unparseablePhones,
+
+  // Stream an NDJSON response so the client can show live per-step progress:
+  //   {"progress":"..."}\n  (repeated)
+  //   {"done":true, ...fullResult}\n   OR  {"error":"..."}\n
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+      const progress = (msg: string) => send({ progress: msg });
+      try {
+        progress('Reading file...');
+        let result;
+        if (isSpreadsheet) {
+          // Raw spreadsheet posted directly: buffer-convert then scrub.
+          const csv = await fileToCsv(file);
+          const r = await scrubContacts(c.env, org, csv, phoneCol);
+          result = { ...r, keptColumns: [] as string[], droppedColumns: 0 };
+        } else {
+          result = await scrubContactsStreaming(c.env, org, file.stream(), {
+            phoneCol,
+            keepColumns,
+            onProgress: progress,
+          });
+        }
+        progress(`Saving to ${destMap[dest]} Google Drive...`);
+        let driveOk = false;
+        let driveFileName: string | undefined;
+        let driveFileId: string | undefined;
+        let driveError: string | undefined;
+        try {
+          const saved = await driveUploadCsv(
+            c.env,
+            driveFolderFor(c.env, dest as DriveDest),
+            fileName,
+            result.cleanedCsv,
+          );
+          driveOk = true;
+          driveFileName = saved.name;
+          driveFileId = saved.id;
+        } catch (e) {
+          driveError = e instanceof Error ? e.message : String(e);
+        }
+        progress('Finishing up...');
+        send({
+          done: true,
+          ok: true,
+          org,
+          inputFile: file.name,
+          destinationLabel: destMap[dest],
+          driveOk,
+          driveFileName,
+          driveFileId,
+          driveError,
+          downloadName: fileName,
+          cleanedCsv: result.cleanedCsv,
+          inputRows: result.inputRows,
+          phoneColumn: result.phoneColumn,
+          phoneColumnIndex: result.phoneColumnIndex,
+          autoDetected: result.autoDetected,
+          scrubbed: result.scrubbed,
+          kept: result.kept,
+          optOutSetSize: result.optOutSetSize,
+          unparseablePhones: result.unparseablePhones,
+          keptColumns: result.keptColumns,
+          droppedColumns: result.droppedColumns,
+        });
+      } catch (e) {
+        send({ error: e instanceof Error ? e.message : String(e) });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store' },
   });
 });
 

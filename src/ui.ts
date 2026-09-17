@@ -62,6 +62,10 @@ select,input[type=file]{width:100%;background:#0a1628;border:1px solid var(--bor
 .sstatus b{color:var(--text);font-weight:600}
 .srow{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:18px}
 .sprogress{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)}
+.kgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 14px;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:12px}
+.kgrid label{display:flex;align-items:center;gap:7px;margin:0;color:var(--text);font-size:13px;font-weight:400;cursor:pointer}
+.kgrid input{width:auto}
+.kcbar a{font-size:12px;color:var(--accent);text-decoration:none;margin-left:10px;font-weight:600}
 .muted{color:var(--muted)} .hide{display:none}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes s{to{transform:rotate(360deg)}}
@@ -171,6 +175,13 @@ th{color:var(--muted);font-weight:600}
       <div id="s-colwrap" class="hide">
         <label>Phone column <span class="muted" style="font-weight:400">(auto-detected, override if needed)</span></label>
         <select id="s-col"><option value="">Auto-detect</option></select>
+      </div>
+      <div id="s-keepwrap" class="hide">
+        <label style="display:flex;align-items:center;justify-content:space-between">
+          <span>Columns to keep <span class="muted" style="font-weight:400">(unchecked columns are removed from the output)</span></span>
+          <span class="kcbar"><a href="#" id="s-keep-all">All</a> <a href="#" id="s-keep-none">None</a> <a href="#" id="s-keep-default">Default</a></span>
+        </label>
+        <div id="s-keep" class="kgrid"></div>
       </div>
       <div class="srow">
         <button class="btn" id="s-run" disabled>Scrub list</button>
@@ -467,7 +478,49 @@ function sFileUI(){
     drop.classList.remove('filled');
     txt.textContent='Drop a CSV or Excel file here or click to choose';
   }
+  sBuildKeep();
 }
+// Default columns to keep (case-insensitive). Present ones are pre-checked.
+const S_KEEP_DEFAULT=['cellphone','phone','phonenumber','cell','mobile','firstname','middlename','lastname','namesuffix','state','congressionaldistrict'];
+let sHeaderCols=[];
+// Read the uploaded file's header (CSV or XLSX) and render keep-column checkboxes.
+async function sBuildKeep(){
+  const wrap=$('#s-keepwrap');const grid=$('#s-keep');const f=s.file.files[0];
+  if(!f){wrap.classList.add('hide');grid.innerHTML='';sHeaderCols=[];return;}
+  let cols=[];
+  try{
+    const nm=(f.name||'').toLowerCase();
+    if(nm.endsWith('.xlsx')||nm.endsWith('.xls')){
+      if(typeof XLSX==='undefined'){wrap.classList.add('hide');return;}
+      const buf=await f.slice(0,256*1024).arrayBuffer();
+      const wb=XLSX.read(new Uint8Array(buf),{type:'array',sheetRows:1});
+      const sheet=wb.Sheets[wb.SheetNames[0]];
+      const csv=XLSX.utils.sheet_to_csv(sheet);
+      cols=splitCsvClient((csv.split(/\r?\n/)[0])||'');
+    }else{
+      const txt=await f.slice(0,64*1024).text();
+      cols=splitCsvClient((txt.split(/\r?\n/)[0])||'');
+    }
+  }catch(e){wrap.classList.add('hide');return;}
+  sHeaderCols=cols;
+  grid.innerHTML=cols.map((c,i)=>{
+    const name=(c||('col '+i));
+    const def=S_KEEP_DEFAULT.indexOf(String(c).trim().toLowerCase())>=0;
+    return '<label><input type="checkbox" class="s-keep-cb" value="'+i+'"'+(def?' checked':'')+'>'+name.replace(/</g,'&lt;')+'</label>';
+  }).join('');
+  wrap.classList.remove('hide');
+}
+// Returns array of column names to keep, or null if all are checked (no trim).
+function sKeepColumns(){
+  const cbs=Array.prototype.slice.call(document.querySelectorAll('.s-keep-cb'));
+  if(cbs.length===0)return null;
+  const checked=cbs.filter(cb=>cb.checked);
+  if(checked.length===cbs.length)return null; // keep everything -> no trim
+  return checked.map(cb=>sHeaderCols[parseInt(cb.value,10)]);
+}
+$('#s-keep-all').onclick=(e)=>{e.preventDefault();document.querySelectorAll('.s-keep-cb').forEach(cb=>cb.checked=true);};
+$('#s-keep-none').onclick=(e)=>{e.preventDefault();document.querySelectorAll('.s-keep-cb').forEach(cb=>cb.checked=false);};
+$('#s-keep-default').onclick=(e)=>{e.preventDefault();document.querySelectorAll('.s-keep-cb').forEach(cb=>{cb.checked=S_KEEP_DEFAULT.indexOf(String(sHeaderCols[parseInt(cb.value,10)]).trim().toLowerCase())>=0;});};
 // Filled zone should not re-open the picker on body click (only the Change link handles it).
 // wireDrop already handles click-to-open + drag/drop; we only block re-open when filled.
 s.afterPick=sFileUI;
@@ -530,6 +583,7 @@ function sResetForm(){
   $('#s-project').value='';
   $('#s-result').classList.add('hide');
   $('#s-colwrap').classList.add('hide');
+  $('#s-keepwrap').classList.add('hide');$('#s-keep').innerHTML='';
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
   $('#s-progress').classList.add('hide');$('#s-progress-text').textContent='';
   const btn=$('#s-run');btn.textContent='Scrub list';btn.classList.remove('ghost');btn.disabled=true;
@@ -539,6 +593,37 @@ function sResetForm(){
 // Live single-line progress narration. Hidden when idle; replaced by green checks when done.
 function sProg(text){const p=$('#s-progress');$('#s-progress-text').textContent=text;p.classList.remove('hide');}
 function sProgDone(){$('#s-progress').classList.add('hide');$('#s-progress-text').textContent='';}
+// POST a form and read a streamed NDJSON response, calling onProgress for each
+// {progress} line. Returns the final {done,...} object (or throws on {error}).
+async function streamScrub(url,body,onProgress){
+  const r=await fetch(url,{method:'POST',body});
+  const ct=r.headers.get('content-type')||'';
+  // Session expired -> server redirected us to an HTML login page.
+  if(r.redirected && r.url.indexOf('/auth/login')>=0){window.location.href='/auth/login';throw new Error('Your session expired. Redirecting to sign in...');}
+  if(!r.body||ct.indexOf('ndjson')<0){
+    // Fallback: not a stream. Try JSON, else surface a readable error.
+    let t='';try{t=await r.text();}catch(e){}
+    try{const j=JSON.parse(t);if(j.error)throw new Error(j.error);return j;}catch(e){throw new Error('Unexpected response ('+r.status+'): '+t.slice(0,200));}
+  }
+  const reader=r.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf='',final=null;
+  for(;;){
+    const {value,done}=await reader.read();
+    if(done)break;
+    buf+=value;let nl=buf.indexOf('\n');
+    while(nl>=0){
+      const line=buf.slice(0,nl).trim();buf=buf.slice(nl+1);nl=buf.indexOf('\n');
+      if(!line)continue;
+      let obj;try{obj=JSON.parse(line);}catch(e){continue;}
+      if(obj.progress&&onProgress)onProgress(obj.progress);
+      else if(obj.error)throw new Error(obj.error);
+      else if(obj.done)final=obj;
+    }
+  }
+  if(buf.trim()){try{const obj=JSON.parse(buf.trim());if(obj.error)throw new Error(obj.error);if(obj.done)final=obj;}catch(e){}}
+  if(!final)throw new Error('Scrub did not complete (no result received).');
+  return final;
+}
 $('#s-run').onclick=async()=>{
   const btn=$('#s-run');
   if(sMode==='again'){sResetForm();return;}
@@ -547,18 +632,16 @@ $('#s-run').onclick=async()=>{
   if(!dest){alert('Pick a destination first (the cleaned list is saved to that Drive folder).');return;}
   if(!project){alert('Enter a project name (used as the Drive file name).');return;}
   const colv=$('#s-col').value;
-  const orgLabel=($('#s-org').selectedOptions[0]||{}).textContent||org;
-  const destLabel=(dest==='bigdog'?'Big Dog':'Creative Direct');
   btn.disabled=true;btn.textContent='Working...';
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
-  // Single upload: scrub + Drive save + returns cleaned CSV for download.
+  // Single upload, streamed NDJSON response drives the live progress line.
   let d;
   try{
     sProg('Reading file...');
     const up=await toUploadFile(f);
     const fd=new FormData();fd.append('org',org);fd.append('dest',dest);fd.append('project',project);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
-    sProg('Scrubbing '+orgLabel+' list against opt-outs, saving to '+destLabel+' Drive...');
-    d=await jsonFetch('/api/scrub/drive',{method:'POST',body:fd});
+    const keep=sKeepColumns();if(keep!==null)fd.append('keepColumns',keep.join(','));
+    d=await streamScrub('/api/scrub/drive',fd,(msg)=>sProg(msg));
   }catch(e){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Scrub failed: '+e.message);return;}
   if(d.error){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Scrub failed: '+d.error);return;}
   // Render results
@@ -585,9 +668,12 @@ $('#s-run').onclick=async()=>{
     const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=dlName;a.click();
     dlLine='<span class="ok">\u2713 Downloaded</span> <b>'+dlName+'</b>';
   }catch(e){dlLine='<span class="bad">\u2715 Download failed</span> <span class="muted">('+e.message+')</span>';}
+  // Optional: columns-trimmed note
+  let colLine='';
+  if(d.droppedColumns&&d.droppedColumns>0){colLine='<div><span class="ok">\u2713 Trimmed columns</span> <span class="muted">kept '+(d.keptColumns?d.keptColumns.length:0)+', removed '+d.droppedColumns+'</span></div>';}
   // Progress line disappears; green checks take its place
   sProgDone();
-  $('#s-drive-msg').innerHTML='<div>'+drLine+'</div><div>'+dlLine+'</div>';
+  $('#s-drive-msg').innerHTML=colLine+'<div>'+drLine+'</div><div>'+dlLine+'</div>';
   $('#s-drive-msg').classList.remove('hide');
   // Button becomes a neutral "Scrub another"
   btn.textContent='Scrub another';btn.classList.add('ghost');btn.disabled=false;sMode='again';

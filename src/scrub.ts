@@ -148,9 +148,22 @@ export interface ScrubResult {
   cleanedCsv: string;    // resulting file content
 }
 
+/** Serialize a CSV field, quoting only when needed. */
+function csvField(v: string): string {
+  if (v.includes(',') || v.includes('"') || v.includes('\n') || v.includes('\r')) {
+    return '"' + v.replace(/"/g, '""') + '"';
+  }
+  return v;
+}
+
 /** Build the opt-out phone set by streaming source files (bounded memory). */
-export async function buildOptOutSetStreaming(env: Env, org: string): Promise<Set<string>> {
+export async function buildOptOutSetStreaming(
+  env: Env,
+  org: string,
+  onFiles?: (count: number) => void,
+): Promise<Set<string>> {
   const files = await filesForOrg(env, org);
+  if (onFiles) onFiles(files.length);
   const set = new Set<string>();
   for (const f of files) {
     const res = await getObject(env, 'source', f.key);
@@ -178,13 +191,30 @@ export async function buildOptOutSetStreaming(env: Env, org: string): Promise<Se
  * output incrementally, so we never hold multiple full copies of a large file
  * in memory at once (avoids the Worker 128MB limit on 100k-row lists).
  */
+export interface StreamScrubOptions {
+  phoneCol?: number;
+  /** If set, output keeps only these columns (by header name, case-insensitive), in this order. */
+  keepColumns?: string[];
+  /** Called with a human-readable progress message at each phase. */
+  onProgress?: (msg: string) => void | Promise<void>;
+}
+
 export async function scrubContactsStreaming(
   env: Env,
   org: string,
   fileStream: ReadableStream<Uint8Array>,
-  phoneColOverride?: number,
-): Promise<ScrubResult> {
-  const optOuts = await buildOptOutSetStreaming(env, org);
+  opts: StreamScrubOptions = {},
+): Promise<ScrubResult & { keptColumns: string[]; droppedColumns: number }> {
+  const phoneColOverride = opts.phoneCol;
+  const emit = async (m: string) => { if (opts.onProgress) await opts.onProgress(m); };
+
+  await emit('Reading opt-out list...');
+  let fileCount = 0;
+  const optOuts = await buildOptOutSetStreaming(env, org, (n) => { fileCount = n; });
+  await emit(
+    `Scrubbing against ${optOuts.size.toLocaleString()} opt-outs (${fileCount} source file${fileCount === 1 ? '' : 's'})...`,
+  );
+
   const outParts: string[] = [];
   let headerCols: string[] = [];
   let phoneIdx = -1;
@@ -192,6 +222,14 @@ export async function scrubContactsStreaming(
   let inputRows = 0;
   let scrubbed = 0;
   let unparseable = 0;
+
+  // Column-trim setup (resolved after we see the header).
+  const wantKeep = (opts.keepColumns || []).map((c) => c.trim().toLowerCase()).filter(Boolean);
+  let keepIdx: number[] | null = null; // indexes to keep, in output order
+  let keptColumns: string[] = [];
+
+  const projectLine = (cols: string[]): string =>
+    keepIdx === null ? '' : keepIdx.map((i) => csvField(cols[i] ?? '')).join(',');
 
   for await (const line of streamLines(fileStream)) {
     if (!headerSeen) {
@@ -204,18 +242,36 @@ export async function scrubContactsStreaming(
           ? phoneColOverride
           : findPhoneColumn(headerCols);
       if (phoneIdx < 0) phoneIdx = 0;
-      outParts.push(line);
+      // Resolve which columns to keep.
+      if (wantKeep.length > 0) {
+        const lower = headerCols.map((h) => h.trim().toLowerCase());
+        keepIdx = [];
+        for (const name of wantKeep) {
+          const i = lower.indexOf(name);
+          if (i >= 0) keepIdx.push(i);
+        }
+        // Safety: always keep the phone column so downstream detection works.
+        if (!keepIdx.includes(phoneIdx)) keepIdx.push(phoneIdx);
+        keptColumns = keepIdx.map((i) => headerCols[i]);
+        outParts.push(keepIdx.map((i) => csvField(headerCols[i] ?? '')).join(','));
+        await emit(`Trimming to ${keepIdx.length} column${keepIdx.length === 1 ? '' : 's'}, scrubbing rows...`);
+      } else {
+        keptColumns = headerCols;
+        outParts.push(line);
+      }
       continue;
     }
     if (!line.trim()) continue;
     inputRows++;
     const cols = splitCsvLine(line);
     const p = normalizePhone(cols[phoneIdx] ?? '');
-    if (!p) { unparseable++; outParts.push(line); continue; }
+    const outLine = keepIdx === null ? line : projectLine(cols);
+    if (!p) { unparseable++; outParts.push(outLine); continue; }
     if (optOuts.has(p)) { scrubbed++; continue; }
-    outParts.push(line);
+    outParts.push(outLine);
   }
 
+  await emit('Building cleaned file...');
   return {
     org,
     inputRows,
@@ -227,6 +283,8 @@ export async function scrubContactsStreaming(
     kept: inputRows - scrubbed,
     unparseablePhones: unparseable,
     cleanedCsv: outParts.join('\n'),
+    keptColumns,
+    droppedColumns: Math.max(0, headerCols.length - keptColumns.length),
   };
 }
 

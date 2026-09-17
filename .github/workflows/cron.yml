@@ -9,12 +9,12 @@ name: Opt-Out Sync Cron
 
 on:
   schedule:
-    # TEMP one-off test: 20:05 UTC (3:05pm CT) today, to verify end-to-end.
-    - cron: '5 20 * * *'
-    # Real twice-daily schedule (restore after test): 12:00 UTC (7am CT) and
-    # 00:00 UTC (7pm CT). GitHub cron is best-effort and can lag several min.
-    # - cron: '0 12 * * *'
-    # - cron: '0 0 * * *'
+    # Nightly at 8:33pm Central. GitHub cron is UTC-only and does NOT observe
+    # DST, so this is pinned to the current CDT offset (UTC-5): 8:33pm CDT =
+    # 01:33 UTC. When Central switches to CST (UTC-6, ~Nov-Mar) this fires at
+    # 7:33pm local until updated to '33 2 * * *'. GitHub cron is best-effort
+    # and can lag several minutes.
+    - cron: '33 1 * * *'
   workflow_dispatch:
     inputs:
       target:

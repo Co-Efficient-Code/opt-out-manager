@@ -238,7 +238,17 @@ export async function buildRunLog(
       .map(([project, count]) => ({ project, count }))
       .sort((a, b) => b.count - a.count),
     excluded: { count: excludedCount },
-    projects: [...perProject.values()].sort((a, b) => b.count - a.count),
+    // Sort the project breakdown by leading project number, biggest first
+    // (newest project on top). The number is the first token of the name;
+    // names without a leading number sort to the bottom.
+    projects: [...perProject.values()].sort((a, b) => {
+      const na = parseInt((a.project.match(/^\d+/) || [''])[0], 10);
+      const nb = parseInt((b.project.match(/^\d+/) || [''])[0], 10);
+      const va = Number.isNaN(na) ? -Infinity : na;
+      const vb = Number.isNaN(nb) ? -Infinity : nb;
+      if (vb !== va) return vb - va;
+      return a.project.localeCompare(b.project);
+    }),
   };
 }
 
@@ -338,8 +348,6 @@ export function buildRunEmail(
     }
     t.push('');
     t.push(`Assign these here: ${runLogsUrl}`);
-  } else {
-    t.push('All projects mapped. No action needed.');
   }
   if (log.projects.length) {
     t.push('');
@@ -381,8 +389,6 @@ export function buildRunEmail(
     h.push(`</ul>`);
     h.push(`<a href="${esc(runLogsUrl)}" style="display:inline-block;background:#E27124;color:#fff;text-decoration:none;padding:9px 16px;border-radius:6px;font-weight:600;font-size:13px">Assign mappings in Run logs</a>`);
     h.push(`</div>`);
-  } else {
-    h.push(`<div style="color:#16a34a;font-weight:600;font-size:13px">All projects mapped. No action needed.</div>`);
   }
   // Per-project breakdown
   if (log.projects.length) {

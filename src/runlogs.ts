@@ -341,10 +341,6 @@ export function buildRunEmail(
   } else {
     t.push('All projects mapped. No action needed.');
   }
-  if (log.excluded && log.excluded.count > 0) {
-    t.push('');
-    t.push(`Intentionally excluded: ${log.excluded.count.toLocaleString()} opt-out(s) on the ignore list (never uploaded, not flagged).`);
-  }
   if (log.projects.length) {
     t.push('');
     t.push('Project breakdown (new / total):');
@@ -355,6 +351,10 @@ export function buildRunEmail(
       const map = p.pac && p.destination ? `${p.pac} / ${p.destination}` : 'UNMAPPED';
       t.push(`  ${p.project}: ${nt}  [${map}]`);
     }
+  }
+  if (log.excluded && log.excluded.count > 0) {
+    t.push('');
+    t.push(`* ${log.excluded.count.toLocaleString()} opt-out(s) intentionally excluded (ignore list).`);
   }
 
   // --- html ---
@@ -384,9 +384,6 @@ export function buildRunEmail(
   } else {
     h.push(`<div style="color:#16a34a;font-weight:600;font-size:13px">All projects mapped. No action needed.</div>`);
   }
-  if (log.excluded && log.excluded.count > 0) {
-    h.push(`<div style="color:#64748b;font-size:12px;margin:8px 0 0">Intentionally excluded: <b>${log.excluded.count.toLocaleString()}</b> opt-out(s) on the ignore list (never uploaded, not flagged).</div>`);
-  }
   // Per-project breakdown
   if (log.projects.length) {
     h.push(`<h3 style="font-size:15px;margin:22px 0 6px">Project breakdown</h3>`);
@@ -402,6 +399,9 @@ export function buildRunEmail(
       h.push(`<tr><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(p.project)}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${pacCell}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${destCell}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9">${newCell}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#64748b">${p.count.toLocaleString()}</td></tr>`);
     }
     h.push(`</tbody></table>`);
+  }
+  if (log.excluded && log.excluded.count > 0) {
+    h.push(`<div style="color:#94a3b8;font-size:11px;margin:14px 0 0">* ${log.excluded.count.toLocaleString()} opt-out(s) intentionally excluded (ignore list).</div>`);
   }
   h.push(`</div>`);
 

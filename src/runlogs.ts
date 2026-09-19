@@ -2,7 +2,7 @@ import type { Env } from './types';
 import type { SyncRole } from './s3';
 import { listObjects, getObject } from './s3';
 import type { RgopOptOut } from './rgop';
-import { loadOverrides, cleanName, type OverrideMap } from './mapping';
+import { loadOverrides, loadIgnorePhones, cleanName, type OverrideMap } from './mapping';
 
 /**
  * Run-log dry-run: pull opt-outs from ReadyGOP, parse each project into a
@@ -124,6 +124,7 @@ export interface RunLog {
   inputOptOuts: number;
   groups: RunGroup[];
   quarantined: { project: string; count: number }[];
+  excluded: { count: number }; // intentionally ignored (frozen ignore_phones list)
   projects: ProjectRow[];
 }
 
@@ -140,12 +141,22 @@ export async function buildRunLog(
   const say = async (m: string) => { if (onPhase) await onPhase(m); };
   await say('Loading saved project mappings');
   const overrides: OverrideMap = await loadOverrides(env);
+  const ignorePhones = await loadIgnorePhones(env);
+  let excludedCount = 0;
   const groups = new Map<string, Set<string>>(); // "pac|dest" -> phones
   const projectPhones = new Map<string, Set<string>>(); // project -> phones
   const quarantine = new Map<string, number>();
   const perProject = new Map<string, ProjectRow>();
 
   for (const r of rows) {
+    // Intentionally-ignored numbers: never written, never flagged. Matched by
+    // exact normalized phone against the frozen ignore_phones list. Any NEW
+    // blank/unknown opt-out (not on the list) still flows to quarantine below.
+    const np = normalizePhone(r.phone);
+    if (np && ignorePhones.has(np)) {
+      excludedCount += 1;
+      continue;
+    }
     const clean = cleanName(r.project) || '(unknown)';
     const parsed = parseProject(r.project);
     // Human override wins over the parser (per-field).
@@ -226,6 +237,7 @@ export async function buildRunLog(
     quarantined: [...quarantine.entries()]
       .map(([project, count]) => ({ project, count }))
       .sort((a, b) => b.count - a.count),
+    excluded: { count: excludedCount },
     projects: [...perProject.values()].sort((a, b) => b.count - a.count),
   };
 }
@@ -329,6 +341,10 @@ export function buildRunEmail(
   } else {
     t.push('All projects mapped. No action needed.');
   }
+  if (log.excluded && log.excluded.count > 0) {
+    t.push('');
+    t.push(`Intentionally excluded: ${log.excluded.count.toLocaleString()} opt-out(s) on the ignore list (never uploaded, not flagged).`);
+  }
   if (log.projects.length) {
     t.push('');
     t.push('Project breakdown (new / total):');
@@ -367,6 +383,9 @@ export function buildRunEmail(
     h.push(`</div>`);
   } else {
     h.push(`<div style="color:#16a34a;font-weight:600;font-size:13px">All projects mapped. No action needed.</div>`);
+  }
+  if (log.excluded && log.excluded.count > 0) {
+    h.push(`<div style="color:#64748b;font-size:12px;margin:8px 0 0">Intentionally excluded: <b>${log.excluded.count.toLocaleString()}</b> opt-out(s) on the ignore list (never uploaded, not flagged).</div>`);
   }
   // Per-project breakdown
   if (log.projects.length) {

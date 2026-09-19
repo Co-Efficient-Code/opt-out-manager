@@ -32,6 +32,41 @@ export function cleanName(name: string): string {
   return (name || '').replace(/\t/g, ' ').trim();
 }
 
+// --- Ignore list ------------------------------------------------------------
+// Exact phone numbers that must NEVER map to a bucket and must NOT trip the
+// "needs mapping" flag. Frozen, deliberate allowlist (seeded once). Stored as
+// a JSON array of normalized 10-digit strings under IGNORE_KEY in the same KV.
+// Matching is by exact number, so any NEW blank/unknown opt-out still flags.
+const IGNORE_KEY = 'ignore_phones';
+
+/** Normalize a phone to 10 digits (drop leading US 1). Null if not 10/11-digit. */
+export function normalizePhone(raw: string | null | undefined): string | null {
+  const d = (raw || '').replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('1')) return d.slice(1);
+  if (d.length === 10) return d;
+  return null;
+}
+
+/** Load the frozen ignore set (normalized 10-digit phones). Best-effort. */
+export async function loadIgnorePhones(env: Env): Promise<Set<string>> {
+  const set = new Set<string>();
+  if (!env.OPTOUT_MAPPING) return set;
+  const raw = await env.OPTOUT_MAPPING.get(IGNORE_KEY);
+  if (!raw) return set;
+  try {
+    const arr = JSON.parse(raw) as unknown;
+    if (Array.isArray(arr)) {
+      for (const v of arr) {
+        const n = normalizePhone(typeof v === 'string' ? v : String(v));
+        if (n) set.add(n);
+      }
+    }
+  } catch {
+    /* ignore parse errors; treat as empty */
+  }
+  return set;
+}
+
 export async function loadOverrides(env: Env): Promise<OverrideMap> {
   if (!env.OPTOUT_MAPPING) return {};
   const raw = await env.OPTOUT_MAPPING.get(KEY);

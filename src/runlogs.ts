@@ -21,6 +21,10 @@ import { loadOverrides, loadIgnorePhones, cleanName, type OverrideMap } from './
 const PAC_TOKENS: [string, string][] = [
   ['SAG', 'sag-pac'],
   ['No Going Back', 'no-going-back-pac'],
+  ['SMP', 'strategic-majority-pac'],
+  // MAGA must stay LAST: 'MAGA' can appear in many strings; earlier, more
+  // specific PAC tokens win via first-match, so MAGA only catches leftovers.
+  ['MAGA', 'maga-inc'],
 ];
 const DEST_TOKENS: [string, string][] = [
   ['Big Dog', 'Big Dog'],

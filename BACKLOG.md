@@ -17,17 +17,17 @@ Known issues and deferred work. Newest at top. Keep this on `main`.
 - **Next step:** root-cause the workflow failure (likely secrets/token or wrangler action config). Not blocking; local deploy works.
 - **Status:** open, not blocking. Flagged 2026-09-18.
 
-### 2. Michigan scrub file blocked by Cloudflare WAF (SQL-injection false positive)
-- **What:** scrubbing `MAGA_MI_8_Persuasion_Cells_20260913.csv` fails. Cloudflare WAF managed ruleset flags the request as SQL injection and blocks it before it reaches the Worker.
-- **Impact:** medium. That specific list cannot be scrubbed through the UI right now.
-- **Likely cause:** some cell content in the upload trips a managed WAF SQLi rule. Common with names/values containing SQL-like tokens (quotes, `--`, `OR`, etc.).
-- **Possible fixes (to evaluate):**
-  - WAF exception / skip rule scoped to the scrub upload path on `optouts.coefficient.org` (narrow as possible).
-  - Send the upload in a way the WAF does not inspect as a query (e.g. ensure multipart body, not URL-encoded query params).
-  - Client-side pre-encode the file before POST and decode in the Worker.
-- **Status:** open, deferred. Flagged 2026-09-18.
-
 ## Resolved
+
+### 2. Scrub uploads blocked by Cloudflare WAF (SQLi false positive) - FIXED 2026-09-21
+- **Symptom:** scrubbing certain persuasion-cell files (`MAGA_MI_8_...`, `MAGA_NH_1_...`) returned `403` with a Cloudflare "Sorry, you have been blocked" page - blocked at the edge, never reached the Worker.
+- **Root cause (proven on staging by bisecting):** the managed WAF SQLi ruleset scores the request body. Two independent triggers: (a) `--` tokens in dirty date fields (`1988--`, `-00-00`, `1976-03-00`) - collapsing `--`->`-` made the same file pass; (b) it is a scoring threshold across the whole body, so small slices passed while the full file did not. NOT one poisoned row.
+- **What did NOT work:** gzip. Large gzip BINARY bodies get WAF-blocked on their own regardless of content (a benign large gz 403s; the same content as plain CSV passes). Gzip trades one false positive for another. Rejected after staging test.
+- **Fix (Option A, base64):** client base64-encodes the CSV before upload (`.csv.b64`, `text/plain`). Base64 output is only `[A-Za-z0-9+/=]` - no `--`/quotes/SQL tokens, and stays plain text (not flagged-binary), so it passes the WAF at full size. Worker decodes transparently: buffered decode in `fileToCsv`, plus a streaming base64 decoder (`base64DecodeStream`) for the large-file `/scrub/drive` path so memory stays bounded on 100k-row files. Covers all upload paths: `/scrub`, `/scrub/drive`, `/preview`, `/push`.
+- **Verified:** real NH file base64 -> 302 (past WAF) on staging AND prod; plain -> still 403. Decode round-trip byte-perfect (buffered + streaming, all chunk sizes). Human UI click-through on staging confirmed clean by Sally 2026-09-21 13:29 CDT.
+- **Deployed:** staging (version 07018950) + production (version 02b9ab95), local wrangler.
+- Files: `src/ui.ts` (toUploadFile -> base64), `src/parsefile.ts` (base64ToBytes + base64DecodeStream + fileToCsv .b64 detect), `src/index.ts` (/scrub/drive stream decode).
+
 
 ### PA 01 9.8 re-flagging every night (false "needs mapping") - FIXED 2026-09-21
 - **Symptom:** nightly email kept flagging `261156 PA 01 Creative Direct 9.8` as unmapped (held 4,084 opt-outs), growing each night. Those opt-outs were already reported.

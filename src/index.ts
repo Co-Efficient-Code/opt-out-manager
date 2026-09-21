@@ -5,7 +5,7 @@ import { listAccounts, listAccountsForRole, filesForOrg, listFilesForRole } from
 import type { SyncRole } from './s3';
 import { scrubContacts, scrubContactsStreaming, buildOptOutSet, normalizeOptOutCsv } from './scrub';
 import { putObjectNoOverwrite, getObject } from './s3';
-import { fileToCsv } from './parsefile';
+import { fileToCsv, base64DecodeStream } from './parsefile';
 import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
 
 import { loadOverrides, setOverride, PAC_SLUGS, DESTINATIONS } from './mapping';
@@ -249,6 +249,8 @@ api.post('/scrub/drive', async (c) => {
   const keepRaw = String(form.get('keepColumns') || '').trim();
   const keepColumns = keepRaw ? keepRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
   const nm = (file.name || '').toLowerCase();
+  // Client base64-encodes CSV uploads (opaque to WAF). Encoded names end in .b64.
+  const isB64 = nm.endsWith('.b64');
   const isSpreadsheet = nm.endsWith('.xlsx') || nm.endsWith('.xls');
   const base = project.replace(/\.csv$/i, '');
   const fileName = `${base}_scrubbed.csv`;
@@ -270,7 +272,11 @@ api.post('/scrub/drive', async (c) => {
           const r = await scrubContacts(c.env, org, csv, phoneCol);
           result = { ...r, keptColumns: [] as string[], droppedColumns: 0 };
         } else {
-          result = await scrubContactsStreaming(c.env, org, file.stream(), {
+          // Base64 CSV: transparently decode the byte stream before scrubbing.
+          const src = isB64
+            ? file.stream().pipeThrough(base64DecodeStream())
+            : file.stream();
+          result = await scrubContactsStreaming(c.env, org, src, {
             phoneCol,
             keepColumns,
             onProgress: progress,

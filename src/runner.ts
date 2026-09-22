@@ -69,6 +69,21 @@ export async function runOptOutSync(env: Env, opts: RunOptions): Promise<RunResu
     (msg) => prog('readback', msg),
   );
 
+  return commitRunLog(env, log, opts);
+}
+
+/**
+ * COMMIT PHASE (shared): given a computed RunLog, do the S3 write (gated by
+ * ALLOW_S3_WRITES) + summary email + run-history persist. Used by BOTH the
+ * ReadyGOP runner and the manual-drop commit route, so the write/email/history
+ * behavior is byte-identical across sources. This function performs the actual
+ * dump + email - do NOT call it for a preview.
+ */
+export async function commitRunLog(env: Env, log: RunLog, opts: RunOptions): Promise<RunResult> {
+  const prog = async (phase: string, message: string, extra?: Record<string, unknown>) => {
+    if (opts.onProgress) await opts.onProgress(phase, message, extra);
+  };
+
   // --- S3 WRITE STEP -------------------------------------------------------
   // Writes only when ALLOW_S3_WRITES === 'true' (per-env config, OFF by
   // default). Writes each mapped group's NEW opt-outs to its REAL destination
@@ -105,16 +120,23 @@ export async function runOptOutSync(env: Env, opts: RunOptions): Promise<RunResu
   try {
     await prog('email', 'Sending summary email...');
     const mail = buildRunEmail(log, opts.appUrl);
+    // SAFETY: on staging, force ALL summary emails to Jacob only, so testing
+    // (esp. the manual-drop commit) never spams the full team list. Prod uses
+    // the real distribution list. Explicit opts.emailTo still wins if set.
+    const isStaging = (env.APP_ENV || '').toLowerCase() === 'staging';
+    const recipients = opts.emailTo && opts.emailTo.length
+      ? opts.emailTo
+      : (isStaging ? ['jacob@coefficient.org'] : DEFAULT_EMAIL_TO);
     await sendEmail(env, {
       fromEmail: 'chopper@coefficient.org',
-      fromName: 'Chopper (Opt-Out Sync)',
-      to: opts.emailTo && opts.emailTo.length ? opts.emailTo : DEFAULT_EMAIL_TO,
-      subject: mail.subject,
+      fromName: 'Chopper (Opt-Out Sync)' + (isStaging ? ' [STAGING]' : ''),
+      to: recipients,
+      subject: (isStaging ? '[STAGING] ' : '') + mail.subject,
       html: mail.html,
       text: mail.text,
     });
     email = { sent: true };
-    await prog('email', `Summary email sent to ${(opts.emailTo || DEFAULT_EMAIL_TO).join(', ')}`);
+    await prog('email', `Summary email sent to ${recipients.join(', ')}`);
   } catch (e) {
     email = { sent: false, error: e instanceof Error ? e.message : String(e) };
     await prog('email', `Email failed (run still OK): ${email.error}`);

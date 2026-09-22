@@ -8,9 +8,10 @@ import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv, base64DecodeStream } from './parsefile';
 import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
 
-import { loadOverrides, setOverride, PAC_SLUGS, DESTINATIONS } from './mapping';
+import { loadOverrides, setOverride, cleanName, PAC_SLUGS, DESTINATIONS, type OverrideMap } from './mapping';
 import { loadRunHistory, loadLastRunLog } from './runhistory';
-import { runOptOutSync } from './runner';
+import { runOptOutSync, commitRunLog } from './runner';
+import { parseUploadCsv, buildRunLog } from './runlogs';
 import { renderApp } from './ui';
 
 type Variables = { user: SessionUser };
@@ -525,6 +526,152 @@ api.get('/runlogs/history', async (c) => {
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
   }
+});
+
+// ===========================================================================
+// MANUAL DROP (custom CSV opt-out upload from a non-ReadyGOP texting platform).
+// Two-phase, map-BEFORE-commit flow, fully DECOUPLED from the ReadyGOP button
+// and the nightly cron. Phase 1 (preview) writes NOTHING and sends NO email.
+// Phase 2 (commit) does the S3 dump + ONE email, only when the user confirms.
+// One-off overrides (mapping chosen in the preview) are applied in-memory for
+// THIS run only and are NEVER persisted to KV.
+// ===========================================================================
+
+// Decode an uploaded file field into CSV text (handles the .b64 WAF-bypass
+// encoding the client uses, same as the Scrub tab).
+async function uploadedFileToCsvText(file: File): Promise<string> {
+  const nm = (file.name || '').toLowerCase();
+  if (nm.endsWith('.b64')) {
+    const src = file.stream().pipeThrough(base64DecodeStream());
+    return await new Response(src).text();
+  }
+  return await file.text();
+}
+
+// Parse a JSON overrides map from a form field. Shape: { "<project>": {pac,destination} }
+function parseExtraOverrides(raw: unknown): OverrideMap {
+  const out: OverrideMap = {};
+  if (typeof raw !== 'string' || !raw.trim()) return out;
+  let obj: unknown;
+  try { obj = JSON.parse(raw); } catch { return out; }
+  if (!obj || typeof obj !== 'object') return out;
+  for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+    if (!v || typeof v !== 'object') continue;
+    const pac = (v as any).pac;
+    const destination = (v as any).destination;
+    out[cleanName(k)] = {
+      pac: pac != null && String(pac) !== '' ? String(pac) : null,
+      destination: destination != null && String(destination) !== '' ? String(destination) : null,
+    };
+  }
+  return out;
+}
+
+// PHASE 1 - PREVIEW: parse the CSV, compute the run-log (read-only, applying
+// any one-off overrides), and stream NDJSON progress + final result. NO write,
+// NO email. Safe to call repeatedly as the user maps projects.
+api.post('/manualdrop/preview', async (c) => {
+  const encoder = new TextEncoder();
+  let file: File | null = null;
+  let extra: OverrideMap = {};
+  try {
+    const form = await c.req.formData();
+    const f = form.get('file');
+    if (f instanceof File) file = f;
+    extra = parseExtraOverrides(form.get('overrides'));
+  } catch (e) {
+    return c.json({ ok: false, error: 'bad form: ' + (e instanceof Error ? e.message : String(e)) }, 400);
+  }
+  if (!file) return c.json({ ok: false, error: 'missing file' }, 400);
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+      try {
+        send({ type: 'progress', phase: 'parse', message: 'Reading uploaded file...' });
+        const csv = await uploadedFileToCsvText(file!);
+        const parsed = parseUploadCsv(csv);
+        send({
+          type: 'progress',
+          phase: 'parse',
+          message: `Parsed ${parsed.usableRows.toLocaleString()} opt-outs (${parsed.skippedNoPhone.toLocaleString()} skipped)`,
+        });
+        const log = await buildRunLog(
+          c.env,
+          parsed.rows,
+          { client: 'Manual drop', source: 'csv-upload', totalCount: parsed.usableRows },
+          (msg) => send({ type: 'progress', phase: 'readback', message: msg }),
+          extra,
+        );
+        send({ type: 'done', ok: true, preview: true, wrote: false, parse: {
+          totalRows: parsed.totalRows, usableRows: parsed.usableRows,
+          skippedNoPhone: parsed.skippedNoPhone, phoneHeader: parsed.phoneHeader,
+          projectHeader: parsed.projectHeader,
+        }, log });
+      } catch (e) {
+        send({ type: 'error', ok: false, error: e instanceof Error ? e.message : String(e) });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' },
+  });
+});
+
+// PHASE 2 - COMMIT: re-parse the SAME file, re-compute with the confirmed
+// one-off overrides, then do the S3 dump + ONE summary email + history via the
+// SHARED commitRunLog (identical to the ReadyGOP path). This is the only manual
+// route that writes/emails, and only on explicit user confirm.
+api.post('/manualdrop/commit', async (c) => {
+  const encoder = new TextEncoder();
+  const user = c.get('user');
+  const appUrl = c.env.APP_URL || new URL(c.req.url).origin;
+  let file: File | null = null;
+  let extra: OverrideMap = {};
+  try {
+    const form = await c.req.formData();
+    const f = form.get('file');
+    if (f instanceof File) file = f;
+    extra = parseExtraOverrides(form.get('overrides'));
+  } catch (e) {
+    return c.json({ ok: false, error: 'bad form: ' + (e instanceof Error ? e.message : String(e)) }, 400);
+  }
+  if (!file) return c.json({ ok: false, error: 'missing file' }, 400);
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+      try {
+        send({ type: 'progress', phase: 'parse', message: 'Reading uploaded file...' });
+        const csv = await uploadedFileToCsvText(file!);
+        const parsed = parseUploadCsv(csv);
+        const log = await buildRunLog(
+          c.env,
+          parsed.rows,
+          { client: 'Manual drop', source: 'csv-upload', totalCount: parsed.usableRows },
+          (msg) => send({ type: 'progress', phase: 'readback', message: msg }),
+          extra,
+        );
+        const result = await commitRunLog(c.env, log, {
+          appUrl,
+          triggeredBy: user?.email || 'unknown',
+          triggeredByName: user?.name,
+          source: 'csv-upload',
+          onProgress: (phase, message, e2) => send({ type: 'progress', phase, message, ...(e2 || {}) }),
+        });
+        send({ type: 'done', ok: true, preview: false, wrote: result.write.written > 0, log: result.log, email: result.email, write: result.write });
+      } catch (e) {
+        send({ type: 'error', ok: false, error: e instanceof Error ? e.message : String(e) });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' },
+  });
 });
 
 // MAPPING: read current human-assigned project overrides + the canonical

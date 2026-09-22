@@ -158,6 +158,7 @@ th{color:var(--muted);font-weight:600}
   <div class="tabs">
     <div class="tab active" data-tab="scrub">Scrub a list</div>
     <div class="tab" data-tab="runlogs">Run logs</div>
+    <div class="tab" data-tab="manualdrop">Manual drop</div>
     <div class="tab" data-tab="uploaded">Uploaded lists</div>
     <div class="tab" data-tab="browse">Browse buckets</div>
     <div class="tab" data-tab="docs">Documentation</div>
@@ -248,6 +249,44 @@ th{color:var(--muted);font-weight:600}
     <div class="card" id="rl-hist-card">
       <h2>Run history</h2>
       <div id="rl-hist"><span class="muted">No runs yet. Hit Refresh Optouts.</span></div>
+    </div>
+  </div>
+
+  <!-- MANUAL DROP (custom CSV upload; map BEFORE commit; decoupled from Run logs) -->
+  <div id="manualdrop" class="hide">
+    <div class="card">
+      <h2>Manual opt-out drop</h2>
+      <p class="sub">Upload an opt-out CSV from another texting platform. It previews and lets you map any unmapped projects <b>before</b> anything is emailed or written to S3. Does not touch ReadyGOP or the nightly batch.</p>
+      <label>Opt-out CSV</label>
+      <div class="drop" id="md-drop"><span id="md-drop-text">Drop an opt-out CSV here or click to choose</span><input type="file" id="md-file" accept=".csv" class="hide"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="md-preview" disabled>Preview</button>
+        <span id="md-status" class="muted"></span>
+      </div>
+      <div id="md-parsemeta" class="meta hide" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card hide" id="md-quar-card">
+      <h2>Needs mapping <span class="muted" style="font-weight:400;font-size:13px">(one-off for this drop — not saved permanently)</span></h2>
+      <div id="md-bulk" class="row" style="margin-bottom:12px"></div>
+      <div id="md-quar"></div>
+    </div>
+    <div class="card hide" id="md-groups-card">
+      <h2>New opt-outs (preview)</h2>
+      <div id="md-groups"></div>
+    </div>
+    <div class="card hide" id="md-proj-card">
+      <h2>All projects</h2>
+      <div id="md-proj"></div>
+    </div>
+
+    <div class="card hide" id="md-commit-card">
+      <h2>Confirm &amp; upload</h2>
+      <p class="sub" id="md-commit-note"></p>
+      <div class="row">
+        <button class="btn" id="md-commit" disabled>Confirm &amp; upload</button>
+        <span id="md-commit-status" class="muted"></span>
+      </div>
     </div>
   </div>
 
@@ -447,6 +486,7 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   t.classList.add('active');
   $('#scrub').classList.toggle('hide',t.dataset.tab!=='scrub');
   $('#runlogs').classList.toggle('hide',t.dataset.tab!=='runlogs');
+  $('#manualdrop').classList.toggle('hide',t.dataset.tab!=='manualdrop');
   $('#push').classList.toggle('hide',t.dataset.tab!=='push');
   $('#docs').classList.toggle('hide',t.dataset.tab!=='docs');
   $('#browse').classList.toggle('hide',t.dataset.tab!=='browse');
@@ -995,6 +1035,190 @@ async function loadUploaded(){
     tree.innerHTML='<p class="muted">Failed to load: '+e.message+'</p>';
   }
 }
+// ===========================================================================
+// MANUAL DROP tab: upload CSV -> preview (map one-off) -> confirm & upload.
+// Fully decoupled from Run logs. Preview never writes/emails; commit does both
+// only on explicit confirm. One-off overrides live in-memory (mdOverrides) and
+// are sent with each request; they are NEVER persisted to KV.
+// ===========================================================================
+let mdFile=null;              // the picked File (raw)
+let mdOverrides={};           // { "<project>": {pac,destination} } one-off, this drop only
+let mdLastLog=null;           // last preview run-log
+const mdWire=wireDrop('#md-drop','#md-file','#md-drop-text','#md-preview','#md-file','');
+// wireDrop's readiness check keys off orgId/destId; for manual drop we only
+// need a file, so override onpick behavior via the file input directly.
+(function(){
+  const file=$('#md-file');const drop=$('#md-drop');const txt=$('#md-drop-text');
+  function refresh(){
+    const f=file.files[0];mdFile=f||null;
+    if(f){drop.classList.add('filled');txt.innerHTML='<div class="s-drop-name"></div><div class="s-drop-change">Change file</div>';txt.querySelector('.s-drop-name').textContent=f.name;txt.querySelector('.s-drop-change').onclick=(e)=>{e.stopPropagation();file.value='';refresh();};}
+    else{drop.classList.remove('filled');txt.textContent='Drop an opt-out CSV here or click to choose';}
+    $('#md-preview').disabled=!f;
+  }
+  file.addEventListener('change',refresh);
+  drop.addEventListener('drop',()=>setTimeout(refresh,0));
+})();
+
+function mdResetResultCards(){
+  ['#md-quar-card','#md-groups-card','#md-proj-card','#md-commit-card'].forEach(id=>$(id).classList.add('hide'));
+}
+// Stream an NDJSON POST (multipart) and surface progress; return final done ev.
+async function mdStream(url,onProgress){
+  const fd=new FormData();
+  const up=await toUploadFile(mdFile); // base64 .b64 to pass the WAF
+  fd.append('file',up,up.name);
+  fd.append('overrides',JSON.stringify(mdOverrides));
+  const r=await fetch(url,{method:'POST',body:fd});
+  if(r.redirected&&r.url.indexOf('/auth/login')>=0){window.location.href='/auth/login';return null;}
+  if(!r.body)throw new Error('no stream');
+  const reader=r.body.getReader();const dec=new TextDecoder();let buf='';let done=null;
+  while(true){
+    const {value,done:d}=await reader.read();if(d)break;
+    buf+=dec.decode(value,{stream:true});let nl;
+    while((nl=buf.indexOf(String.fromCharCode(10)))>=0){
+      const line=buf.slice(0,nl).trim();buf=buf.slice(nl+1);if(!line)continue;
+      let ev;try{ev=JSON.parse(line);}catch(e){continue;}
+      if(ev.type==='progress'&&onProgress)onProgress(ev.message||'Working...');
+      else if(ev.type==='done')done=ev;
+      else if(ev.type==='error')throw new Error(ev.error||'error');
+    }
+  }
+  return done;
+}
+
+$('#md-preview').onclick=async function(){
+  if(!mdFile)return;
+  const btn=$('#md-preview');const st=$('#md-status');
+  btn.disabled=true;st.innerHTML='<span class="spin"></span>Previewing...';
+  mdResetResultCards();
+  try{
+    // load canonical PAC/dest lists for the pickers (reuse rl lists)
+    if(!rlPacs.length){try{var m=await jsonFetch('/api/mapping');rlPacs=m.pacSlugs||[];rlDests=m.destinations||[];}catch(e){}}
+    const done=await mdStream('/api/manualdrop/preview',(msg)=>{st.innerHTML='<span class="spin"></span>'+msg;});
+    if(!done||!done.log){st.textContent='Preview failed (no result).';btn.disabled=false;return;}
+    st.textContent='';mdLastLog=done.log;
+    mdRenderPreview(done);
+  }catch(e){st.textContent='Preview failed: '+e.message;}
+  btn.disabled=false;
+};
+
+function mdRenderPreview(done){
+  const log=done.log;const p=done.parse||{};
+  // parse meta
+  var pm=$('#md-parsemeta');
+  pm.innerHTML='<span>File: <b>'+(mdFile?mdFile.name:'')+'</b></span>'+
+    '<span>Opt-outs: <b>'+(p.usableRows||log.inputOptOuts||0).toLocaleString()+'</b></span>'+
+    (p.skippedNoPhone?'<span>Skipped: <b>'+p.skippedNoPhone.toLocaleString()+'</b></span>':'')+
+    '<span>Columns: <b>'+(p.phoneHeader||'phone')+' / '+(p.projectHeader||'project')+'</b></span>';
+  pm.classList.remove('hide');
+  // quarantined (unmapped) with one-off pickers + bulk assign
+  var quar=log.quarantined||[];
+  if(quar.length){
+    var bulk=$('#md-bulk');
+    var pacOpts='<option value="">PAC...</option>'+rlPacs.map(function(x){return '<option value="'+x+'">'+x+'</option>';}).join('');
+    var destOpts='<option value="">Destination...</option>'+rlDests.map(function(x){return '<option value="'+x+'">'+x+'</option>';}).join('');
+    bulk.innerHTML='<span class="muted" style="margin-right:6px">Assign ALL unmapped:</span>'+
+      '<select id="md-bulk-pac">'+pacOpts+'</select> <select id="md-bulk-dest">'+destOpts+'</select> '+
+      '<button class="btn" id="md-bulk-apply" style="padding:6px 12px">Apply to all</button>';
+    var qh='<table class="qtable"><thead><tr><th class="q-proj">Project</th><th class="q-held">Opt-outs</th><th class="q-assign"></th></tr></thead><tbody>';
+    quar.forEach(function(x){qh+='<tr><td class="q-proj" title="'+x.project.replace(/"/g,'&quot;')+'">'+x.project+'</td><td class="q-held" style="color:var(--accent)">'+x.count.toLocaleString()+'</td><td class="q-assign">'+mdAssignCell(x.project)+'</td></tr>';});
+    qh+='</tbody></table>';
+    $('#md-quar').innerHTML=qh;$('#md-quar-card').classList.remove('hide');
+    mdWireAssigns($('#md-quar'));
+    $('#md-bulk-apply').onclick=function(){
+      var pac=$('#md-bulk-pac').value;var dest=$('#md-bulk-dest').value;
+      if(!pac||!dest){alert('Pick both PAC and Destination for the bulk assign.');return;}
+      quar.forEach(function(x){mdOverrides[x.project]={pac:pac,destination:dest};});
+      mdRepreview();
+    };
+  }else{$('#md-quar-card').classList.add('hide');}
+  // new opt-outs groups
+  var groups=log.groups||[];
+  if(groups.length){
+    var gh='<table><thead><tr><th>PAC</th><th>Destination</th><th style="text-align:right">Unique</th><th style="text-align:right">Already reported</th><th style="text-align:right">New</th></tr></thead><tbody>';
+    groups.forEach(function(x){gh+='<tr><td>'+x.pac+'</td><td>'+x.destination+'</td><td style="text-align:right">'+x.todayUnique.toLocaleString()+'</td><td style="text-align:right" class="muted">'+x.alreadyReported.toLocaleString()+'</td><td style="text-align:right;color:#4ade80">'+x.newCount.toLocaleString()+'</td></tr>';});
+    gh+='</tbody></table>';$('#md-groups').innerHTML=gh;$('#md-groups-card').classList.remove('hide');
+  }else{$('#md-groups-card').classList.add('hide');}
+  // all projects breakdown (same rows the summary email will contain)
+  var mdProjects=log.projects||[];
+  if(mdProjects.length){
+    var icOk='<span class="ic ic-ok" title="Mapped"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span>';
+    var icBlock='<span class="ic ic-block" title="Unmapped"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg></span>';
+    var dash='<span class="muted">-</span>';
+    var ph='<table class="ptable"><thead><tr><th class="c-stat">&nbsp;</th><th class="c-proj">Project</th><th class="c-pac">PAC</th><th class="c-dest">Destination</th><th class="c-new">New</th><th class="c-tot">Total</th></tr></thead><tbody>';
+    mdProjects.forEach(function(x){
+      var mapped=x.status==='mapped';
+      var icon=mapped?icOk:icBlock;
+      var newCell=(mapped&&x.newCount!=null)?'<span class="nt-new">'+x.newCount.toLocaleString()+'</span>':dash;
+      var title=mapped?('Mapped'+(x.source==='override'?' (assigned)':'')):'Unmapped';
+      ph+='<tr><td class="c-stat" title="'+title+'">'+icon+'</td><td class="c-proj" title="'+x.project.replace(/"/g,'&quot;')+'">'+x.project+'</td><td class="c-pac">'+(x.pac||dash)+'</td><td class="c-dest">'+(x.destination||dash)+'</td><td class="c-new">'+newCell+'</td><td class="c-tot">'+x.count.toLocaleString()+'</td></tr>';
+    });
+    ph+='</tbody></table>';$('#md-proj').innerHTML=ph;$('#md-proj-card').classList.remove('hide');
+  }else{$('#md-proj-card').classList.add('hide');}
+  // commit card
+  var newTotal=groups.reduce(function(s,x){return s+x.newCount;},0);
+  var qCount=quar.length;
+  var note=$('#md-commit-note');
+  note.innerHTML='This will write <b>'+newTotal.toLocaleString()+'</b> new opt-out(s) to S3 and send <b>one</b> summary email.'+
+    (qCount?(' <span style="color:var(--accent)">'+qCount+' project(s) still unmapped and will be held.</span>'):' All projects are mapped.');
+  $('#md-commit').disabled=false;
+  $('#md-commit-card').classList.remove('hide');
+}
+
+// One-off assign cell (does NOT hit /api/mapping; updates mdOverrides only).
+function mdAssignCell(project){
+  var cur=mdOverrides[project]||{};
+  var pacOpts='<option value="">Select...</option>'+rlPacs.map(function(x){return '<option value="'+x+'"'+(cur.pac===x?' selected':'')+'>'+x+'</option>';}).join('');
+  var destOpts='<option value="">Select...</option>'+rlDests.map(function(x){return '<option value="'+x+'"'+(cur.destination===x?' selected':'')+'>'+x+'</option>';}).join('');
+  return '<span class="assign" data-project="'+encodeURIComponent(project)+'">'+
+    '<span class="asg-field"><label>PAC</label><select class="asg-pac">'+pacOpts+'</select></span>'+
+    '<span class="asg-field"><label>Destination</label><select class="asg-dest">'+destOpts+'</select></span>'+
+    '<button class="btn asg-save" style="padding:6px 12px">Apply</button>'+
+    '<span class="asg-msg muted"></span></span>';
+}
+function mdWireAssigns(root){
+  root.querySelectorAll('.asg-save').forEach(function(btn){
+    btn.onclick=function(){
+      var box=btn.closest('.assign');var project=decodeURIComponent(box.dataset.project);
+      var pac=box.querySelector('.asg-pac').value;var dest=box.querySelector('.asg-dest').value;
+      var msg=box.querySelector('.asg-msg');
+      if(!pac||!dest){msg.textContent='Pick both.';return;}
+      mdOverrides[project]={pac:pac,destination:dest};
+      msg.textContent='Applied. Updating...';mdRepreview();
+    };
+  });
+}
+// Re-run the preview with the current one-off overrides so counts update live.
+async function mdRepreview(){
+  const st=$('#md-status');st.innerHTML='<span class="spin"></span>Updating preview...';
+  $('#md-commit').disabled=true;
+  try{
+    const done=await mdStream('/api/manualdrop/preview',(msg)=>{st.innerHTML='<span class="spin"></span>'+msg;});
+    if(done&&done.log){st.textContent='';mdLastLog=done.log;mdRenderPreview(done);}
+    else st.textContent='Update failed.';
+  }catch(e){st.textContent='Update failed: '+e.message;}
+}
+
+$('#md-commit').onclick=async function(){
+  if(!mdFile){return;}
+  var newTotal=(mdLastLog&&mdLastLog.groups||[]).reduce(function(s,x){return s+x.newCount;},0);
+  var qCount=(mdLastLog&&mdLastLog.quarantined||[]).length;
+  var warn='Upload '+newTotal.toLocaleString()+' new opt-out(s) to S3 and send the summary email now?';
+  if(qCount)warn+=String.fromCharCode(10,10)+qCount+' project(s) are still unmapped and will be HELD (not uploaded).';
+  if(!confirm(warn))return;
+  const btn=$('#md-commit');const st=$('#md-commit-status');
+  btn.disabled=true;st.innerHTML='<span class="spin"></span>Uploading...';
+  try{
+    const done=await mdStream('/api/manualdrop/commit',(msg)=>{st.innerHTML='<span class="spin"></span>'+msg;});
+    if(!done){st.textContent='Upload failed (no result).';btn.disabled=false;return;}
+    var wrote=(done.write&&done.write.written)||0;
+    var emailed=(done.email&&done.email.sent)?'email sent':'email NOT sent';
+    st.innerHTML='<span style="color:#4ade80">Done.</span> '+wrote+' file(s) written, '+emailed+'.';
+    // lock the commit button after a successful commit to avoid double-send
+    btn.textContent='Uploaded';btn.disabled=true;
+  }catch(e){st.textContent='Upload failed: '+e.message;btn.disabled=false;}
+};
+
 loadAccounts();
 </script>
 </body></html>`;

@@ -102,6 +102,103 @@ async function readExistingPhones(env: Env, destination: string, pac: string): P
   return phones;
 }
 
+// --- CSV upload adapter (manual drop, non-ReadyGOP source) ------------------
+// Parse an uploaded opt-out CSV into the SAME RgopOptOut[] shape the ReadyGOP
+// pull produces, so it rides the identical downstream pipeline. Reads only the
+// Phone + Project columns; ignores all other metadata. Fully RFC4180-ish quote
+// aware (handles quoted fields with embedded commas AND newlines - the sample
+// export has multi-line quoted message text).
+
+/** Split a full CSV document into rows of fields, honoring quotes + newlines. */
+function parseCsvRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let field = '';
+  let row: string[] = [];
+  let q = false;
+  // strip a leading UTF-8 BOM if present
+  if (text.charCodeAt(0) === 0xfeff) text = text.slice(1);
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else q = false;
+      } else field += ch;
+    } else {
+      if (ch === '"') q = true;
+      else if (ch === ',') { row.push(field); field = ''; }
+      else if (ch === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else if (ch === '\r') { /* skip, handled by \n */ }
+      else field += ch;
+    }
+  }
+  // last field/row (if file doesn't end in newline)
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+export interface CsvParseResult {
+  rows: RgopOptOut[];
+  totalRows: number;      // data rows seen (excl header)
+  usableRows: number;     // rows with a valid phone
+  skippedNoPhone: number; // rows dropped for missing/invalid phone
+  phoneHeader: string;
+  projectHeader: string;
+}
+
+/**
+ * Parse an uploaded opt-out CSV -> RgopOptOut[].
+ * Auto-detects the phone column (header contains 'phone') and the project
+ * column (header === 'project' or contains 'project'). Throws if either is
+ * missing so the UI can show a clear error instead of silently producing junk.
+ */
+export function parseUploadCsv(text: string): CsvParseResult {
+  const grid = parseCsvRows(text);
+  if (!grid.length) throw new Error('Empty file.');
+  const header = grid[0].map((h) => h.trim());
+  const lower = header.map((h) => h.toLowerCase());
+  const pIdx = lower.findIndex((h) => h === 'phone' || h.includes('phone'));
+  let projIdx = lower.findIndex((h) => h === 'project');
+  if (projIdx < 0) projIdx = lower.findIndex((h) => h.includes('project'));
+  if (pIdx < 0) throw new Error('No phone column found (need a header containing "phone").');
+  if (projIdx < 0) throw new Error('No project column found (need a header "project").');
+  // optional status/reinstated columns for defensive filtering
+  const statusIdx = lower.findIndex((h) => h === 'status');
+  const reinstIdx = lower.findIndex((h) => h.includes('reinstated'));
+  const createdIdx = lower.findIndex((h) => h.includes('opted out') || h.includes('created'));
+
+  const out: RgopOptOut[] = [];
+  let usable = 0, skipped = 0, dataRows = 0;
+  for (let i = 1; i < grid.length; i++) {
+    const cols = grid[i];
+    if (cols.length === 1 && cols[0].trim() === '') continue; // blank line
+    dataRows++;
+    // Defensive: skip explicitly reinstated rows if the column exists.
+    if (reinstIdx >= 0 && (cols[reinstIdx] || '').trim() !== '') { skipped++; continue; }
+    if (statusIdx >= 0) {
+      const st = (cols[statusIdx] || '').trim().toLowerCase();
+      if (st && st !== 'opted out') { skipped++; continue; }
+    }
+    const phone = normalizePhone(cols[pIdx] ?? null);
+    if (!phone) { skipped++; continue; }
+    const project = (cols[projIdx] ?? '').replace(/\t/g, ' ').trim();
+    out.push({
+      phone,
+      project,
+      createdAt: createdIdx >= 0 ? ((cols[createdIdx] || '').trim() || null) : null,
+    });
+    usable++;
+  }
+  return {
+    rows: out,
+    totalRows: dataRows,
+    usableRows: usable,
+    skippedNoPhone: skipped,
+    phoneHeader: header[pIdx],
+    projectHeader: header[projIdx],
+  };
+}
+
 // --- run-log builder --------------------------------------------------------
 export interface RunGroup {
   pac: string;
@@ -141,10 +238,18 @@ export async function buildRunLog(
   rows: RgopOptOut[],
   meta: { client: string; source: string; totalCount: number },
   onPhase?: (msg: string) => void | Promise<void>,
+  // One-off, in-memory overrides (e.g. manual-drop preview mapping). These are
+  // merged ON TOP of the persisted KV overrides for THIS run only; they are
+  // never written to KV. Persisted overrides still win nothing special here -
+  // the extra map takes precedence so the human's per-drop choice applies.
+  extraOverrides?: OverrideMap,
 ): Promise<RunLog> {
   const say = async (m: string) => { if (onPhase) await onPhase(m); };
   await say('Loading saved project mappings');
-  const overrides: OverrideMap = await loadOverrides(env);
+  const persisted: OverrideMap = await loadOverrides(env);
+  const overrides: OverrideMap = extraOverrides
+    ? { ...persisted, ...extraOverrides }
+    : persisted;
   const ignorePhones = await loadIgnorePhones(env);
   let excludedCount = 0;
   const groups = new Map<string, Set<string>>(); // "pac|dest" -> phones

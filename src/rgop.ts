@@ -23,6 +23,10 @@ export interface RgopOptOut {
   phone: string | null;
   project: string;
   createdAt: string | null;
+  // Which texting platform this opt-out came from. Set by each pull source so
+  // the run log / email can attribute each project to its platform. Projects
+  // are unique to one platform, so this is a clean 1:1 label per project.
+  platform?: 'ReadyGOP' | 'co/nnect';
 }
 
 const OPTOUTS_QUERY = `query($f:[OptOutQueryFilterInput!],$first:Int,$after:String){
@@ -88,6 +92,7 @@ export async function pullOptOuts(
         phone: n?.phone?.number ?? null,
         project: nm,
         createdAt: n?.createdAt ?? null,
+        platform: 'ReadyGOP',
       });
     }
     if (opts.onProgress) await opts.onProgress({ page: i + 1, pulled: rows.length, totalCount });

@@ -24,6 +24,12 @@ export interface Env {
 
   // Secret - ReadyGOP proxy (full URL incl. ?api_key=...). READ ONLY pulls.
   RGOP_PROXY_URL: string;
+  // co/nnect (txt.coefficient.org) opt-out export. READ ONLY pull.
+  //   CONNECT_API_URL: export endpoint (var). Defaults to the known export.csv.
+  //   CONNECT_API_TOKEN: Bearer token (secret). If unset, the co/nnect pull is
+  //   skipped (non-fatal) and the run proceeds with ReadyGOP only.
+  CONNECT_API_URL?: string;
+  CONNECT_API_TOKEN?: string;
   // Secret - shared bearer token so an external scheduler (GitHub Actions cron)
   // can trigger a run without a Google login.
   CRON_SECRET?: string;

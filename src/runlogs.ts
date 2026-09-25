@@ -45,7 +45,7 @@ const DEST_ROLE: Record<string, SyncRole> = {
   'Creative Direct': 'creativedirect',
 };
 
-function normalizePhone(raw: string | null): string | null {
+export function normalizePhone(raw: string | null): string | null {
   const d = (raw || '').replace(/\D/g, '');
   if (d.length === 11 && d.startsWith('1')) return d.slice(1);
   if (d.length === 10) return d;
@@ -216,6 +216,18 @@ export interface ProjectRow {
   newCount: number | null; // new vs already-reported (null when unmapped/quarantined)
   status: 'mapped' | 'unmapped';
   source: 'parser' | 'override';
+  platform?: string; // texting platform the project's opt-outs came from
+}
+export interface SourceBreakdown {
+  // Per-source input contribution for this run (informational; the S3 diff is
+  // still done on the MERGED, de-duped set). 'overlap' = phones present in both
+  // ReadyGOP and co/nnect inputs (counted once in the merged set).
+  readygop: number;   // usable opt-out rows pulled from ReadyGOP
+  connect: number;    // usable opt-out rows pulled from co/nnect
+  overlap: number;    // phones seen in BOTH sources
+  merged: number;     // unique phones after merge (what fed the run)
+  connectStatus: 'ok' | 'skipped' | 'failed';
+  connectError?: string;
 }
 export interface RunLog {
   ranAt: string;
@@ -227,6 +239,7 @@ export interface RunLog {
   quarantined: { project: string; count: number }[];
   excluded: { count: number }; // intentionally ignored (frozen ignore_phones list)
   projects: ProjectRow[];
+  sourceBreakdown?: SourceBreakdown; // set when a run merges >1 source
 }
 
 /**
@@ -277,6 +290,7 @@ export async function buildRunLog(
       project: clean,
       pac,
       destination,
+      platform: r.platform,
       count: 0,
       newCount: null,
       status: (pac && destination ? 'mapped' : 'unmapped') as 'mapped' | 'unmapped',
@@ -431,9 +445,7 @@ export function buildRunEmail(
   const runLogsUrl = appUrl.replace(/\/$/, '') + '/#runlogs';
   const ranLocal = new Date(log.ranAt).toLocaleString('en-US', { timeZone: 'America/Chicago' });
 
-  const subject =
-    `[Opt-Out Sync] ${log.client}: ${newTotal.toLocaleString()} new` +
-    (quarTotal > 0 ? `, ${log.quarantined.length} project(s) need mapping` : '');
+  const subject = `[Opt-Out Sync] ${log.client}: ${newTotal.toLocaleString()} new`;
 
   // --- plain text ---
   const t: string[] = [];
@@ -443,35 +455,40 @@ export function buildRunEmail(
   t.push(`New opt-outs uploaded: ${newTotal.toLocaleString()}`);
   t.push(`${log.totalCount.toLocaleString()} total opt-outs`);
   t.push('');
-  if (log.groups.length) {
-    t.push('By PAC / Destination:');
-    for (const g of log.groups) {
-      t.push(`  ${g.pac} / ${g.destination}: ${g.newCount.toLocaleString()} new (${g.alreadyReported.toLocaleString()} already reported)`);
-    }
+  // Non-fatal co/nnect failure is still worth a one-line note in the email.
+  if (log.sourceBreakdown && log.sourceBreakdown.connectStatus === 'failed') {
+    t.push(`NOTE: co/nnect pull failed (${log.sourceBreakdown.connectError || 'error'}). ReadyGOP results are unaffected.`);
     t.push('');
   }
-  if (log.quarantined.length) {
-    t.push(`ACTION NEEDED: ${log.quarantined.length} project(s) not mapped, ${quarTotal.toLocaleString()} opt-outs held:`);
-    for (const q of log.quarantined) {
-      t.push(`  ${q.project} (${q.count.toLocaleString()})`);
+  if (log.groups.length) {
+    t.push('By PAC / Client:');
+    for (const g of log.groups) {
+      t.push(`  ${g.pac} / ${g.destination}: ${g.newCount.toLocaleString()} new / ${g.todayUnique.toLocaleString()} total`);
     }
     t.push('');
-    t.push(`Assign these here: ${runLogsUrl}`);
   }
   if (log.projects.length) {
-    t.push('');
     t.push('Project breakdown (new / total):');
     for (const p of log.projects) {
       const nt = p.status === 'mapped' && p.newCount != null
         ? `${p.newCount.toLocaleString()} / ${p.count.toLocaleString()}`
         : `- / ${p.count.toLocaleString()}`;
       const map = p.pac && p.destination ? `${p.pac} / ${p.destination}` : 'UNMAPPED';
-      t.push(`  ${p.project}: ${nt}  [${map}]`);
+      const plat = p.platform ? ` {${p.platform}}` : '';
+      t.push(`  ${p.project}: ${nt}  [${map}]${plat}`);
     }
   }
   if (log.excluded && log.excluded.count > 0) {
     t.push('');
     t.push(`* ${log.excluded.count.toLocaleString()} opt-out(s) intentionally excluded (ignore list).`);
+  }
+  if (log.quarantined.length) {
+    t.push('');
+    t.push(`Note: ${log.quarantined.length} project(s) awaiting mapping (${quarTotal.toLocaleString()} opt-outs held until assigned):`);
+    for (const q of log.quarantined) {
+      t.push(`  ${q.project} (${q.count.toLocaleString()})`);
+    }
+    t.push(`Assign here: ${runLogsUrl}`);
   }
 
   // --- html ---
@@ -481,29 +498,23 @@ export function buildRunEmail(
   h.push(`<h2 style="margin:0 0 4px">Opt-Out Sync run: ${esc(log.client)}</h2>`);
   h.push(`<p style="color:#64748b;margin:0 0 14px;font-size:13px">${esc(ranLocal)} CT</p>`);
   h.push(`<div style="font-size:15px;margin:0 0 16px"><b style="color:#16a34a">${newTotal.toLocaleString()}</b> new opt-outs &nbsp;|&nbsp; ${log.totalCount.toLocaleString()} total opt-outs</div>`);
+  // Non-fatal co/nnect failure note (only when it actually failed).
+  if (log.sourceBreakdown && log.sourceBreakdown.connectStatus === 'failed') {
+    h.push(`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;margin:0 0 16px;font-size:13px;color:#b91c1c">co/nnect pull failed: ${esc(log.sourceBreakdown.connectError || 'error')}. ReadyGOP results are unaffected.</div>`);
+  }
   if (log.groups.length) {
     h.push(`<table style="border-collapse:collapse;width:100%;font-size:13px;margin:0 0 18px"><thead><tr>`);
-    h.push(`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">PAC</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Destination</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">New</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">Already reported</th></tr></thead><tbody>`);
+    h.push(`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">PAC</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Client</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">New</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">Total</th></tr></thead><tbody>`);
     for (const g of log.groups) {
-      h.push(`<tr><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(g.pac)}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(g.destination)}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#16a34a;font-weight:600">${g.newCount.toLocaleString()}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#64748b">${g.alreadyReported.toLocaleString()}</td></tr>`);
+      h.push(`<tr><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(g.pac)}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(g.destination)}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#16a34a;font-weight:600">${g.newCount.toLocaleString()}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#64748b">${g.todayUnique.toLocaleString()}</td></tr>`);
     }
     h.push(`</tbody></table>`);
-  }
-  if (log.quarantined.length) {
-    h.push(`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 16px;margin:0 0 8px">`);
-    h.push(`<div style="font-weight:700;color:#b91c1c;margin:0 0 8px">Action needed: ${log.quarantined.length} project(s) need mapping</div>`);
-    h.push(`<div style="font-size:13px;color:#7f1d1d;margin:0 0 10px">${quarTotal.toLocaleString()} opt-outs are held and will NOT be uploaded until each project is assigned a PAC + Destination.</div>`);
-    h.push(`<ul style="margin:0 0 12px;padding-left:18px;font-size:13px;color:#7f1d1d">`);
-    for (const q of log.quarantined) h.push(`<li>${esc(q.project)} <span style="color:#b91c1c">(${q.count.toLocaleString()})</span></li>`);
-    h.push(`</ul>`);
-    h.push(`<a href="${esc(runLogsUrl)}" style="display:inline-block;background:#E27124;color:#fff;text-decoration:none;padding:9px 16px;border-radius:6px;font-weight:600;font-size:13px">Assign mappings in Run logs</a>`);
-    h.push(`</div>`);
   }
   // Per-project breakdown
   if (log.projects.length) {
     h.push(`<h3 style="font-size:15px;margin:22px 0 6px">Project breakdown</h3>`);
     h.push(`<table style="border-collapse:collapse;width:100%;font-size:13px"><thead><tr>`);
-    h.push(`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Project</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">PAC</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Destination</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">New</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">Total</th></tr></thead><tbody>`);
+    h.push(`<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Project</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">PAC</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Client</th><th style="text-align:left;padding:6px 8px;border-bottom:2px solid #e2e8f0">Texting Platform</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">New</th><th style="text-align:right;padding:6px 8px;border-bottom:2px solid #e2e8f0">Total</th></tr></thead><tbody>`);
     for (const p of log.projects) {
       const mapped = p.status === 'mapped';
       const newCell = mapped && p.newCount != null
@@ -511,12 +522,22 @@ export function buildRunEmail(
         : '<span style="color:#b91c1c">held</span>';
       const pacCell = p.pac ? esc(p.pac) : '<span style="color:#b91c1c">-</span>';
       const destCell = p.destination ? esc(p.destination) : '<span style="color:#b91c1c">-</span>';
-      h.push(`<tr><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(p.project)}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${pacCell}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${destCell}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9">${newCell}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#64748b">${p.count.toLocaleString()}</td></tr>`);
+      const platCell = p.platform ? esc(p.platform) : '<span style="color:#94a3b8">-</span>';
+      h.push(`<tr><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${esc(p.project)}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${pacCell}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${destCell}</td><td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${platCell}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9">${newCell}</td><td style="padding:6px 8px;text-align:right;border-bottom:1px solid #f1f5f9;color:#64748b">${p.count.toLocaleString()}</td></tr>`);
     }
     h.push(`</tbody></table>`);
   }
   if (log.excluded && log.excluded.count > 0) {
     h.push(`<div style="color:#94a3b8;font-size:11px;margin:14px 0 0">* ${log.excluded.count.toLocaleString()} opt-out(s) intentionally excluded (ignore list).</div>`);
+  }
+  // Mapping note - muted, at the very bottom. Held projects are a routine
+  // awaiting-assignment state, not an error, so keep the visual weight low.
+  if (log.quarantined.length) {
+    h.push(`<div style="margin:22px 0 0;padding-top:12px;border-top:1px solid #e2e8f0;font-size:12px;color:#94a3b8">`);
+    h.push(`${log.quarantined.length} project(s) awaiting mapping (${quarTotal.toLocaleString()} opt-outs held until assigned): `);
+    h.push(log.quarantined.map((q) => `${esc(q.project)} (${q.count.toLocaleString()})`).join(', '));
+    h.push(` &middot; <a href="${esc(runLogsUrl)}" style="color:#64748b">Assign in Run logs</a>`);
+    h.push(`</div>`);
   }
   h.push(`</div>`);
 

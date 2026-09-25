@@ -41,6 +41,9 @@ APP_ENV = "staging"
 APP_URL = "https://staging.optouts.coefficient.org"
 # Staging stays dry-run: only prod writes to the real client buckets.
 ALLOW_S3_WRITES = "false"
+# co/nnect (txt.coefficient.org) opt-out export endpoint. Token is the
+# CONNECT_API_TOKEN secret (set via wrangler secret put, not here).
+CONNECT_API_URL = "https://txt.coefficient.org/api/v1/opt-outs/export.csv"
 DRIVE_ROOT_FOLDER = "1E8nIqiFBWzlervF0PNtBuZrGWxdqQ4mF"
 DRIVE_FOLDER_BIGDOG = "1SpcxvbNQPOFUFvwJOZoW70F1IzRg07pJ"
 DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
@@ -69,6 +72,9 @@ binding = "OPTOUT_MAPPING"
 id = "c8cf8d1469094946beb41e22b77c22bd"
 
 [env.production.vars]
+# co/nnect (txt.coefficient.org) opt-out export endpoint. Token is the
+# CONNECT_API_TOKEN secret (set via wrangler secret put, not here).
+CONNECT_API_URL = "https://txt.coefficient.org/api/v1/opt-outs/export.csv"
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
 S3_REGION = "us-east-1"
 APP_ENV = "production"

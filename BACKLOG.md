@@ -4,6 +4,15 @@ Known issues and deferred work. Newest at top. Keep this on `main`.
 
 ## Open
 
+### 4. Move nightly cron off GitHub Actions -> Cloudflare Cron Triggers
+- **What:** the nightly production opt-out sync is triggered by GitHub Actions (`cron.yml`), which POSTs `/cron/run` to the Worker. GitHub attributes scheduled runs to a GitHub *user account* (`sally-bruce` = Chopper's own old identity). That makes prod depend on that account staying in good standing.
+- **Why it matters (proven 2026-09-24):** the `sally-bruce` account's email went unverified, so GitHub blocked all its Actions workflows. Every nightly since 9/22 died at `startup_failure` (before any job ran) - no S3 writes, no email, and it was SILENT until noticed. Root cause was the account gate, not the YAML/billing/secrets (all verified fine).
+- **Fix (real one):** move the schedule to native **Cloudflare Cron Triggers** in `wrangler.toml`. The Worker fires its own `/cron/run` on schedule -> GitHub is out of the critical path entirely, so no GitHub account's email/2FA/state can take down prod. Free. Same nightly, same 9pm CDT target (production, ALLOW_S3_WRITES=true), same email/S3 behavior.
+  - NOTE: native CF cron was previously dropped (commit 8975a11) because it 'fired unreliably' - but that was the Worker doing the FULL sync internally. For a once-a-day self-trigger this is the right tool; revisit reliability with a test.
+- **Also add a dead-man alert:** the 3-night outage was invisible. Add an alert if no successful sync ran in >26h (Worker self-check, or external heartbeat monitor), so a silent stall never goes unnoticed again.
+- **Immediate stopgap (not this item):** verify the `sally-bruce` email at https://github.com/settings/emails + enable 2FA to restore the existing GitHub-Actions nightly. (Jacob doing this manually 2026-09-24 night.)
+- **Status:** open, deferred. Flagged 2026-09-24. Not blocking once email is verified.
+
 ### 3. No KV edit history / audit log (recurrence risk)
 - **What:** Cloudflare KV keeps no per-key version history, no audit log, no deletion trace. When `project_overrides` is changed via the Run logs UI, there is no way to see the before/after or prove what an entry used to be.
 - **Why it matters:** on 2026-09-21 a project (`261156 PA 01 Creative Direct 9.8`) was re-flagging every night. We could not prove or disprove whether its override had ever existed and been removed, because KV retains nothing. Diagnosis had to be reconstructed from `run_history` + live S3/ReadyGOP diffs.

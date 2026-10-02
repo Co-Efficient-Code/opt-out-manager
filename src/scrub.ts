@@ -156,6 +156,42 @@ function csvField(v: string): string {
   return v;
 }
 
+/**
+ * Stream a source-bucket org's opt-out files and invoke `onPhone` for each
+ * normalized phone, WITHOUT materializing the full set. Bounded memory even for
+ * multi-million-row P2P buckets. Used by the Big Dog report to test send-list
+ * membership against P2P without holding the whole bucket. Returns the number of
+ * phones seen.
+ */
+export async function streamSourceOptOutPhones(
+  env: Env,
+  org: string,
+  onPhone: (phone: string) => void,
+  onProgress?: (seen: number) => void | Promise<void>,
+): Promise<number> {
+  const files = await filesForOrg(env, org);
+  let seen = 0;
+  for (const f of files) {
+    const res = await getObject(env, 'source', f.key);
+    if (!res.ok || !res.body) continue;
+    let header: string[] | null = null;
+    let phoneIdx = -1;
+    for await (const line of streamLines(res.body)) {
+      if (header === null) {
+        header = splitCsvLine(line);
+        phoneIdx = findPhoneColumn(header);
+        if (phoneIdx < 0) phoneIdx = header.length - 1;
+        continue;
+      }
+      if (!line.trim()) continue;
+      const cols = splitCsvLine(line);
+      const p = normalizePhone(cols[phoneIdx] ?? '');
+      if (p) { onPhone(p); seen++; if (onProgress && seen % 50000 === 0) await onProgress(seen); }
+    }
+  }
+  return seen;
+}
+
 /** Build the opt-out phone set by streaming source files (bounded memory). */
 export async function buildOptOutSetStreaming(
   env: Env,

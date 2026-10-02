@@ -1293,11 +1293,32 @@ function bdRefreshPreview(){
 $('#bd-refresh-preview').onclick=bdRefreshPreview;
 $('#bd-run').onclick=async function(){
   var btn=$('#bd-run'),st=$('#bd-status');
-  btn.disabled=true;st.innerHTML='<span class="spin"></span>Building report (pulling ReadyGOP + co/nnect + P2P, scrubbing send lists)...';
+  btn.disabled=true;st.innerHTML='<span class="spin"></span>Starting...';
   $('#bd-result').classList.add('hide');
-  var d;
-  try{d=await jsonFetch('/api/bigdog/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});}
-  catch(e){st.innerHTML='<span class="bad">Build failed: '+e.message+'</span>';btn.disabled=false;return;}
+  var d=null;
+  try{
+    var r=await fetch('/api/bigdog/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});
+    if(!r.ok||!r.body){throw new Error('HTTP '+r.status);}
+    var reader=r.body.pipeThrough(new TextDecoderStream()).getReader();
+    var buf='';
+    for(;;){
+      var rd=await reader.read();
+      if(rd.done)break;
+      buf+=rd.value;
+      var nl=buf.indexOf(String.fromCharCode(10));
+      while(nl>=0){
+        var line=buf.slice(0,nl);buf=buf.slice(nl+1);nl=buf.indexOf(String.fromCharCode(10));
+        if(!line.trim())continue;
+        var ev;try{ev=JSON.parse(line);}catch(e){continue;}
+        if(ev.type==='progress'){
+          var ph=ev.phase?('['+ev.phase+'] '):'';
+          st.innerHTML='<span class="spin"></span>'+ph+ev.message;
+        }else if(ev.type==='done'){d=ev;}
+        else if(ev.type==='error'){throw new Error(ev.error||'build failed');}
+      }
+    }
+    if(!d){throw new Error('stream ended with no result');}
+  }catch(e){st.innerHTML='<span class="bad">Build failed: '+e.message+'</span>';btn.disabled=false;return;}
   var s=d.stats||{};
   $('#bd-s-races').textContent=bdNum(s.racesCount);
   $('#bd-s-opt').textContent=bdNum(s.optOutsTotal);

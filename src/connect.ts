@@ -3,6 +3,101 @@ import { parseUploadCsv } from './runlogs';
 import type { RgopOptOut } from './rgop';
 
 /**
+ * Memory-bounded co/nnect pull: fetch the export and reduce it row-by-row via
+ * `onRow`, never building a full grid or row array (the 6.9MB export expands to
+ * ~60k row objects, which combined with other sources blew the Worker's memory
+ * budget). Parses the CSV line by line, matching columns by header name. Applies
+ * the same defensive filters (skip reinstated / non-"opted out"). Returns counts.
+ */
+export async function pullConnectOptOutsReduce(
+  env: Env,
+  onRow: (phone: string | null, project: string) => void,
+): Promise<{ totalRows: number; usableRows: number; skipped: number }> {
+  const token = (env.CONNECT_API_TOKEN || '').trim();
+  if (!token) throw new Error('CONNECT_API_TOKEN is not configured');
+  const url = (env.CONNECT_API_URL || DEFAULT_CONNECT_URL).trim();
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}`, Accept: 'text/csv' },
+    redirect: 'follow',
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`co/nnect export HTTP ${res.status}: ${body.slice(0, 200)}`);
+  }
+  if (!res.body) throw new Error('co/nnect export returned no body');
+
+  const reader = res.body.pipeThrough(new TextDecoderStream('utf-8')).getReader();
+  let buf = '';
+  let header: string[] | null = null;
+  let pIdx = -1, projIdx = -1, statusIdx = -1, reinstIdx = -1;
+  let totalRows = 0, usableRows = 0, skipped = 0;
+
+  const handle = (line: string) => {
+    if (header === null) {
+      header = splitCsvLine(line).map((h) => h.replace(/^\uFEFF/, '').trim());
+      const lower = header.map((h) => h.toLowerCase());
+      pIdx = lower.findIndex((h) => h === 'phone' || h.includes('phone'));
+      projIdx = lower.findIndex((h) => h === 'project');
+      if (projIdx < 0) projIdx = lower.findIndex((h) => h.includes('project'));
+      statusIdx = lower.findIndex((h) => h === 'status');
+      reinstIdx = lower.findIndex((h) => h.includes('reinstated'));
+      if (pIdx < 0) throw new Error('co/nnect export: no phone column');
+      if (projIdx < 0) throw new Error('co/nnect export: no project column');
+      return;
+    }
+    if (!line.trim()) return;
+    totalRows++;
+    const cols = splitCsvLine(line);
+    if (reinstIdx >= 0 && (cols[reinstIdx] || '').trim() !== '') { skipped++; return; }
+    if (statusIdx >= 0) {
+      const st = (cols[statusIdx] || '').trim().toLowerCase();
+      if (st && st !== 'opted out') { skipped++; return; }
+    }
+    const project = (cols[projIdx] ?? '').replace(/\t/g, ' ').trim();
+    onRow(cols[pIdx] ?? null, project);
+    usableRows++;
+  };
+
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += value;
+    let nl = buf.indexOf('\n');
+    while (nl >= 0) {
+      let line = buf.slice(0, nl);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      handle(line);
+      buf = buf.slice(nl + 1);
+      nl = buf.indexOf('\n');
+    }
+  }
+  if (buf.length) { if (buf.endsWith('\r')) buf = buf.slice(0, -1); handle(buf); }
+  return { totalRows, usableRows, skipped };
+}
+
+/** Split a CSV line respecting simple quoted fields. */
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (q) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') q = false;
+      else cur += ch;
+    } else {
+      if (ch === '"') q = true;
+      else if (ch === ',') { out.push(cur); cur = ''; }
+      else cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+/**
  * co/nnect (txt.coefficient.org) opt-out export - READ ONLY.
  *
  * The nightly sync pulls opt-outs from ReadyGOP AND from co/nnect, our other

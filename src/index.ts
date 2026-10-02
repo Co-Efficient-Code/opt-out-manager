@@ -715,52 +715,99 @@ api.post('/mapping', async (c) => {
 });
 
 // --- Big Dog report -------------------------------------------------------
-// In-memory cache of the last build (per isolate). Preview/download read this
-// after a Run. Reporting only: NO email, NO S3 write.
+// The last build is persisted to KV (NOT module memory): Workers run across
+// many isolates, so the isolate that serves /preview or /download is usually
+// NOT the one that ran the build. We render the HTML at build time and stash it
+// (plus a small summary) in KV so any isolate can serve it. Reporting only:
+// NO email, NO S3 write.
+const BIGDOG_HTML_KEY = 'bigdog:last_html';
+const BIGDOG_META_KEY = 'bigdog:last_meta';
+// Fallback in-memory cache (fast path when the same isolate handles both).
 let lastBigDogBuild: BuildResult | null = null;
 
-// Build the report now. Returns the summary (stats + warnings); the full HTML is
-// fetched via /preview or /download so the JSON stays small.
+async function bigdogGetHtml(env: Env): Promise<string | null> {
+  if (lastBigDogBuild) return renderBigDogHtml(lastBigDogBuild);
+  if (env.OPTOUT_MAPPING) return (await env.OPTOUT_MAPPING.get(BIGDOG_HTML_KEY)) || null;
+  return null;
+}
+
+// Build the report now. Streams NDJSON progress so the UI shows live per-phase
+// status (overwriting one line), then a final {type:'done'} with the summary.
+// The full HTML is fetched via /preview or /download so the stream stays small.
 api.post('/bigdog/run', async (c) => {
+  const encoder = new TextEncoder();
+  const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+  const updated = body && typeof (body as any).updated === 'string' ? (body as any).updated : undefined;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+      try {
+        const result = await buildBigDogReport(c.env, {
+          updated,
+          onProgress: (phase, message) => send({ type: 'progress', phase, message }),
+        });
+        lastBigDogBuild = result;
+        const html = renderBigDogHtml(result);
+        if (c.env.OPTOUT_MAPPING) {
+          const meta = {
+            title: result.title, updated: result.updated, generatedAt: result.generatedAt,
+            stats: result.stats, warnings: result.warnings,
+          };
+          // Persist so any isolate can serve preview/download. Best-effort.
+          try {
+            await c.env.OPTOUT_MAPPING.put(BIGDOG_HTML_KEY, html);
+            await c.env.OPTOUT_MAPPING.put(BIGDOG_META_KEY, JSON.stringify(meta));
+          } catch (e) {
+            send({ type: 'progress', phase: 'save', message: `KV save warning: ${e instanceof Error ? e.message : String(e)}` });
+          }
+        }
+        send({
+          type: 'done',
+          ok: true,
+          title: result.title,
+          updated: result.updated,
+          generatedAt: result.generatedAt,
+          stats: result.stats,
+          warnings: result.warnings,
+          unknownRaceKeys: result.unknownRaceKeys,
+          races: result.races.map((r) => ({ key: r.key, name: r.name, order: r.order, pacs: Object.keys(r.pacs) })),
+        });
+      } catch (e) {
+        send({ type: 'error', ok: false, error: e instanceof Error ? e.message : String(e) });
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Accel-Buffering': 'no',
+    },
+  });
+});
+
+// Inline HTML preview of the last build (served from KV so any isolate works).
+api.get('/bigdog/preview', async (c) => {
+  const html = await bigdogGetHtml(c.env);
+  if (!html) return c.html('<p style="font-family:sans-serif;color:#64748b;padding:24px">No report built yet. Click Run first.</p>', 404);
+  return c.html(html);
+});
+
+// Download the last build as an HTML attachment (served from KV).
+api.get('/bigdog/download', async (c) => {
+  const html = await bigdogGetHtml(c.env);
+  if (!html) return c.text('No report built yet. Click Run first.', 404);
+  let stamp = 'latest';
   try {
-    const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
-    const updated = body && typeof (body as any).updated === 'string' ? (body as any).updated : undefined;
-    const result = await buildBigDogReport(c.env, { updated });
-    lastBigDogBuild = result;
-    return c.json({
-      ok: true,
-      title: result.title,
-      updated: result.updated,
-      generatedAt: result.generatedAt,
-      stats: result.stats,
-      warnings: result.warnings,
-      unknownRaceKeys: result.unknownRaceKeys,
-      races: result.races.map((r) => ({
-        key: r.key,
-        name: r.name,
-        order: r.order,
-        pacs: Object.keys(r.pacs),
-      })),
-    });
-  } catch (e) {
-    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
-  }
-});
-
-// Inline HTML preview of the last build.
-api.get('/bigdog/preview', (c) => {
-  if (!lastBigDogBuild) return c.text('No report built yet. Click Run first.', 404);
-  return c.html(renderBigDogHtml(lastBigDogBuild));
-});
-
-// Download the last build as an HTML attachment.
-api.get('/bigdog/download', (c) => {
-  if (!lastBigDogBuild) return c.text('No report built yet. Click Run first.', 404);
-  const html = renderBigDogHtml(lastBigDogBuild);
-  const stamp = (lastBigDogBuild.generatedAt || '').replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_');
+    const metaRaw = c.env.OPTOUT_MAPPING ? await c.env.OPTOUT_MAPPING.get(BIGDOG_META_KEY) : null;
+    const gen = lastBigDogBuild?.generatedAt || (metaRaw ? (JSON.parse(metaRaw).generatedAt as string) : '');
+    if (gen) stamp = gen.replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_');
+  } catch { /* keep 'latest' */ }
   return c.body(html, 200, {
     'Content-Type': 'text/html; charset=utf-8',
-    'Content-Disposition': `attachment; filename="BigDog_MMS_Report_${stamp || 'latest'}.html"`,
+    'Content-Disposition': `attachment; filename="BigDog_MMS_Report_${stamp}.html"`,
   });
 });
 

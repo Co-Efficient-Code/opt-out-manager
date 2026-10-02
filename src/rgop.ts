@@ -104,3 +104,45 @@ export async function pullOptOuts(
   }
   return { rows, totalCount };
 }
+
+/**
+ * Memory-bounded variant: pull ALL opt-outs page by page, invoking `onRow` for
+ * each row and DISCARDING it (never accumulates the full array). Use this when
+ * the caller only needs a reduced view (e.g. a filtered phone Set + per-project
+ * counts), so the 70k+ row array never lives in memory at once.
+ */
+export async function pullOptOutsReduce(
+  env: Env,
+  clientId: string,
+  onRow: (row: RgopOptOut) => void,
+  onProgress?: (pulled: number, totalCount: number) => void | Promise<void>,
+  pageSize = 500,
+): Promise<{ pulled: number; totalCount: number }> {
+  const filters = [{ field: 'clientId', operation: 'EQUAL', value: clientId }];
+  let cursor = 'MA';
+  const seen = new Set<string>(['MA']);
+  let totalCount = 0;
+  let pulled = 0;
+  for (let i = 0; i < 2000; i++) {
+    const d = await gql(env, OPTOUTS_QUERY, { first: pageSize, after: cursor, f: filters });
+    const oo = d?.data?.optOuts;
+    if (!oo) break;
+    totalCount = oo.totalCount ?? totalCount;
+    for (const n of oo.nodes || []) {
+      const nm = (n?.project?.name ?? '').replace(/\t/g, ' ').trim();
+      onRow({
+        phone: n?.phone?.number ?? null,
+        project: nm,
+        createdAt: n?.createdAt ?? null,
+        platform: 'ReadyGOP',
+      });
+      pulled++;
+    }
+    if (onProgress) await onProgress(pulled, totalCount);
+    const next = (oo.cursors || []).find((c: string) => !seen.has(c));
+    if (!next) break;
+    seen.add(next);
+    cursor = next;
+  }
+  return { pulled, totalCount };
+}

@@ -1,7 +1,7 @@
 import type { Env } from './types';
-import { pullOptOuts, MAGA_CLIENT } from './rgop';
-import { pullConnectOptOuts, connectConfigured } from './connect';
-import { buildOptOutSet } from './scrub';
+import { pullOptOutsReduce, MAGA_CLIENT } from './rgop';
+import { pullConnectOptOutsReduce, connectConfigured } from './connect';
+import { streamSourceOptOutPhones } from './scrub';
 import { driveList, driveDownloadText } from './drive';
 import { MAGA_LOGO, BIGDOG_LOGO, COEFF_LOGO } from './bigdogassets';
 
@@ -263,59 +263,50 @@ export async function buildBigDogReport(
   opts: { updated?: string; onProgress?: ProgressFn } = {},
 ): Promise<BuildResult> {
   const prog = async (phase: string, msg: string) => {
+    console.log(`[bigdog] ${phase}: ${msg}`);
     if (opts.onProgress) await opts.onProgress(phase, msg);
   };
   const warnings: string[] = [];
 
   // 1. ReadyGOP opt-outs (SAG provider) ------------------------------------
   await prog('pull', 'Pulling opt-outs from ReadyGOP...');
-  const { rows: rgopRows } = await pullOptOuts(env, MAGA_CLIENT.id, {
-    onProgress: (p) =>
-      prog('pull', `ReadyGOP: ${p.pulled.toLocaleString()}${p.totalCount ? ' of ' + p.totalCount.toLocaleString() : ''} opt-outs`),
-  });
   const sagProvider = new Set<string>();
   const sagOptCountByProject = new Map<string, number>();
-  for (const r of rgopRows) {
+  // Stream-reduce ReadyGOP pages as they arrive: keep only Big Dog SAG phones +
+  // per-project counts, NOT the full 70k-row array (that was blowing memory).
+  await pullOptOutsReduce(env, MAGA_CLIENT.id, (r) => {
     const nm = normWs(r.project);
-    if (!/Big Dog SAG MMS/i.test(nm)) continue;
+    if (!/Big Dog SAG MMS/i.test(nm)) return;
     const p = normPhone(r.phone);
     if (p) sagProvider.add(p);
     sagOptCountByProject.set(nm, (sagOptCountByProject.get(nm) || 0) + 1);
-  }
+  }, (pulled, total) =>
+    prog('pull', `ReadyGOP: ${pulled.toLocaleString()}${total ? ' of ' + total.toLocaleString() : ''} opt-outs`),
+  );
 
   // 2. co/nnect opt-outs (NGB provider) ------------------------------------
   const ngbProvider = new Set<string>();
   const ngbOptCountByProject = new Map<string, number>();
   if (connectConfigured(env)) {
     await prog('pull', 'Pulling opt-outs from co/nnect...');
-    const c = await pullConnectOptOuts(env);
-    for (const r of c.rows) {
-      const nm = normWs(r.project);
-      if (!/Big Dog No Going Back MMS/i.test(nm)) continue;
-      const p = normPhone(r.phone);
+    const c = await pullConnectOptOutsReduce(env, (phone, project) => {
+      const nm = normWs(project);
+      if (!/Big Dog No Going Back MMS/i.test(nm)) return;
+      const p = normPhone(phone);
       if (p) ngbProvider.add(p);
       ngbOptCountByProject.set(nm, (ngbOptCountByProject.get(nm) || 0) + 1);
-    }
+    });
+    await prog('pull', `co/nnect: ${c.usableRows.toLocaleString()} opt-outs (${c.totalRows.toLocaleString()} rows)`);
   } else {
     warnings.push('co/nnect not configured; NGB provider opt-outs skipped.');
   }
 
-  // 3. P2P S3 bucket unions ------------------------------------------------
-  await prog('pull', 'Reading P2P opt-out bucket (SAG)...');
-  const p2pSag = await buildOptOutSet(env, PACS.SAG.p2pOrg).catch((e) => {
-    warnings.push(`P2P sag-pac read failed: ${e instanceof Error ? e.message : String(e)}`);
-    return new Set<string>();
-  });
-  await prog('pull', 'Reading P2P opt-out bucket (No Going Back)...');
-  const p2pNgb = await buildOptOutSet(env, PACS.NGB.p2pOrg).catch((e) => {
-    warnings.push(`P2P no-going-back-pac read failed: ${e instanceof Error ? e.message : String(e)}`);
-    return new Set<string>();
-  });
-
-  const union: Record<keyof typeof PACS, Set<string>> = {
-    SAG: new Set<string>([...sagProvider, ...p2pSag]),
-    NGB: new Set<string>([...ngbProvider, ...p2pNgb]),
-  };
+  // NOTE on memory: the P2P bucket holds MILLIONS of phones per PAC. We never
+  // materialize it. Instead we (a) load all send-list phones first (bounded:
+  // the people we texted), (b) mark provider opt-outs, then (c) STREAM the P2P
+  // bucket once per PAC and mark only send-list phones that appear in it. Peak
+  // memory = send-list size, not bucket size. (Earlier buildOptOutSet() blew
+  // the Worker's memory budget -> 503 exceededMemory.)
 
   // 4. Drive send lists: list folder once, index by project number ----------
   await prog('pull', 'Listing Big Dog send lists from Drive...');
@@ -341,25 +332,141 @@ export async function buildBigDogReport(
     warnings.push('DRIVE_FOLDER_BIGDOG not configured; send lists unavailable.');
   }
 
-  const sendPhoneCache = new Map<string, Set<string>>();
+  // ---- Memory-bounded opt-out membership --------------------------------
+  // optStatus: per PAC, phone -> true once it is found in provider OR P2P.
+  // Seeded ONLY with send-list phones (deduped), so it never grows to bucket
+  // size. Flipped true as we observe each phone in provider sets + P2P stream.
+  const optStatus: Record<keyof typeof PACS, Map<string, boolean>> = {
+    SAG: new Map(), NGB: new Map(),
+  };
+  // Per project number: the phone KEYS on that send list (strings are shared
+  // with optStatus keys, so no duplication). Used for per-wave opt-out counts.
+  // We do NOT cache full Set objects (that retained ~40 lists at once -> OOM).
+  const wavePhones = new Map<string, string[]>();
+  // Per project: send-list size (for "tested"). pac-agnostic (by project number).
   let sendListsFound = 0;
   let sendListsMissing = 0;
-  const getSendPhones = async (num: string | null): Promise<Set<string> | null> => {
-    if (!num) return null;
-    if (sendPhoneCache.has(num)) return sendPhoneCache.get(num)!;
+
+  // Download a send list ONCE, seed its phones into the PAC map, and record the
+  // phone-key array for later counting. Releases the file text immediately.
+  const loadSendList = async (num: string | null, pacKey: keyof typeof PACS): Promise<void> => {
+    if (!num) return;
+    if (wavePhones.has(num)) { // already loaded under some PAC; just ensure seeded
+      const keys = wavePhones.get(num)!;
+      const map = optStatus[pacKey];
+      for (const p of keys) if (!map.has(p)) map.set(p, false);
+      return;
+    }
     const f = sendListByNum.get(num);
-    if (!f) { sendListsMissing++; return null; }
+    if (!f) { sendListsMissing++; return; }
     try {
       const text = await driveDownloadText(env, f.id);
-      const phones = sendPhonesFromCsv(text);
-      sendPhoneCache.set(num, phones);
+      const set = sendPhonesFromCsv(text); // transient; freed after this block
+      const keys = [...set];
+      wavePhones.set(num, keys);
+      const map = optStatus[pacKey];
+      for (const p of keys) if (!map.has(p)) map.set(p, false);
       sendListsFound++;
-      return phones;
+      await prog('build', `Loaded ${f.name} (${keys.length.toLocaleString()} phones) [${sendListsFound} lists]`);
     } catch (e) {
       warnings.push(`send list ${num} download failed: ${e instanceof Error ? e.message : String(e)}`);
       sendListsMissing++;
-      return null;
     }
+  };
+
+  const preloadSendLists = async (
+    projects: Set<string>, marker: string, pacKey: keyof typeof PACS,
+  ) => {
+    for (const nm of projects) {
+      if (!parseProject(nm, marker)) continue;
+      await loadSendList(projectNumber(nm), pacKey);
+    }
+  };
+  await prog('build', `Loading SAG send lists from Drive (${sendListByNum.size} files indexed)...`);
+  await preloadSendLists(new Set([...sagOptCountByProject.keys()]), 'SAG', 'SAG');
+  await prog('build', 'Loading No Going Back send lists from Drive...');
+  await preloadSendLists(new Set([...ngbOptCountByProject.keys()]), 'No Going Back', 'NGB');
+  await prog('build', `Send lists: ${sendListsFound} loaded, ${sendListsMissing} missing. Tracking ${optStatus.SAG.size.toLocaleString()} SAG + ${optStatus.NGB.size.toLocaleString()} NGB phones.`);
+
+  // Single-PAC pre-pass: for races present in only ONE PAC, the report shows a
+  // "potential" block for the MISSING PAC = that race's universe (the have-PAC's
+  // first-wave send list) tested against the MISSING PAC's opt-out channels. To
+  // keep that bounded-memory, seed those universe phones into the missing PAC's
+  // tracking map NOW (before the P2P scan), so the single scan marks them too.
+  const racesByPacKey = (projects: Set<string>, marker: string) => {
+    const m = new Map<string, string[]>(); // raceKey -> project names
+    for (const nm of projects) {
+      const p = parseProject(nm, marker);
+      if (!p) continue;
+      (m.get(p.key) || m.set(p.key, []).get(p.key)!).push(nm);
+    }
+    return m;
+  };
+  const sagRaceKeys = racesByPacKey(new Set([...sagOptCountByProject.keys()]), 'SAG');
+  const ngbRaceKeys = racesByPacKey(new Set([...ngbOptCountByProject.keys()]), 'No Going Back');
+  const allRaceKeys = new Set([...sagRaceKeys.keys(), ...ngbRaceKeys.keys()]);
+  const firstWaveNum = (names: string[] | undefined): string | null => {
+    if (!names || !names.length) return null;
+    const sorted = [...names].sort((a, b) => {
+      const da = /MMS\s+([\d.]+)/i.exec(a)?.[1] || '0';
+      const db = /MMS\s+([\d.]+)/i.exec(b)?.[1] || '0';
+      return sortKey(da) - sortKey(db);
+    });
+    return projectNumber(sorted[0]);
+  };
+  for (const rk of allRaceKeys) {
+    const inSag = sagRaceKeys.has(rk);
+    const inNgb = ngbRaceKeys.has(rk);
+    if (inSag === inNgb) continue; // both or neither -> no potential block
+    const missKey: keyof typeof PACS = inSag ? 'NGB' : 'SAG';
+    const num = firstWaveNum(inSag ? sagRaceKeys.get(rk) : ngbRaceKeys.get(rk));
+    if (!num) continue;
+    // Ensure the have-PAC universe is loaded, then seed those phones into the
+    // MISSING PAC's map too (so the single P2P scan marks them for that PAC).
+    await loadSendList(num, inSag ? 'SAG' : 'NGB');
+    const universe = wavePhones.get(num);
+    if (!universe) continue;
+    const mmap = optStatus[missKey];
+    for (const p of universe) if (!mmap.has(p)) mmap.set(p, false);
+  }
+
+  // Mark provider opt-outs (small sets) against the tracked send-list phones.
+  for (const p of sagProvider) if (optStatus.SAG.has(p)) optStatus.SAG.set(p, true);
+  for (const p of ngbProvider) if (optStatus.NGB.has(p)) optStatus.NGB.set(p, true);
+
+  // Stream the P2P bucket ONCE per PAC; flip only tracked send-list phones.
+  let p2pSagSeen = 0, p2pNgbSeen = 0;
+  await prog('pull', 'Scanning P2P opt-out bucket (SAG)...');
+  try {
+    let last = 0;
+    p2pSagSeen = await streamSourceOptOutPhones(env, PACS.SAG.p2pOrg, (p) => {
+      if (optStatus.SAG.has(p)) optStatus.SAG.set(p, true);
+    }, async (seen) => {
+      if (seen - last >= 250000) { last = seen; await prog('pull', `P2P SAG scan: ${seen.toLocaleString()} rows...`); }
+    });
+    await prog('pull', `P2P SAG scan complete: ${p2pSagSeen.toLocaleString()} rows.`);
+  } catch (e) {
+    warnings.push(`P2P sag-pac scan failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  await prog('pull', 'Scanning P2P opt-out bucket (No Going Back)...');
+  try {
+    let last = 0;
+    p2pNgbSeen = await streamSourceOptOutPhones(env, PACS.NGB.p2pOrg, (p) => {
+      if (optStatus.NGB.has(p)) optStatus.NGB.set(p, true);
+    }, async (seen) => {
+      if (seen - last >= 250000) { last = seen; await prog('pull', `P2P NGB scan: ${seen.toLocaleString()} rows...`); }
+    });
+    await prog('pull', `P2P NGB scan complete: ${p2pNgbSeen.toLocaleString()} rows.`);
+  } catch (e) {
+    warnings.push(`P2P no-going-back-pac scan failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // Helper: count opted-out phones in a send list for a PAC.
+  const countOptOuts = (pacKey: keyof typeof PACS, phones: string[]): number => {
+    let h = 0;
+    const map = optStatus[pacKey];
+    for (const p of phones) if (map.get(p)) h++;
+    return h;
   };
 
   // 5. Assemble waves per race/PAC -----------------------------------------
@@ -387,15 +494,13 @@ export async function buildBigDogReport(
       const parsed = parseProject(nm, marker);
       if (!parsed) continue;
       const num = projectNumber(nm);
-      const phones = await getSendPhones(num);
+      const phones = num ? wavePhones.get(num) || null : null;
       let optOuts: number | null;
       let tested: number | null;
       const providerCount = optCountByProject.get(nm) || 0;
-      if (phones && phones.size) {
-        let hits = 0;
-        for (const p of phones) if (union[pacKey].has(p)) hits++;
-        optOuts = hits;
-        tested = phones.size;
+      if (phones && phones.length) {
+        optOuts = countOptOuts(pacKey, phones);
+        tested = phones.length;
       } else {
         // No send list -> fall back to provider opt-out count (floor).
         optOuts = providerCount;
@@ -430,16 +535,21 @@ export async function buildBigDogReport(
     const have = present[0];
     const missing: keyof typeof PACS = have === 'SAG' ? 'NGB' : 'SAG';
     const w1 = race.pacs[have]!.waves[0];
-    const universe = await getSendPhones(w1?.projectNumber || null);
-    if (universe && universe.size) {
+    const universe = w1?.projectNumber ? wavePhones.get(w1.projectNumber) || null : null;
+    if (universe && universe.length) {
+      // Missing-PAC potential opt-outs = universe phones already opted out in the
+      // missing PAC's channels. We tracked the HAVE pac's send-list phones under
+      // optStatus[have]; for the missing PAC we approximate with the P2P+provider
+      // union we tracked for missing. Since these phones were only seeded under
+      // `have`, re-test them against the missing PAC's tracked map where present.
       let miss = 0;
-      const p2pMissing = missing === 'SAG' ? p2pSag : p2pNgb;
-      for (const p of universe) if (p2pMissing.has(p)) miss++;
+      const mmap = optStatus[missing];
+      for (const p of universe) if (mmap.get(p)) miss++;
       race.pacs[missing] = {
         potential: true,
-        universe: universe.size,
+        universe: universe.length,
         potentialOptOuts: miss,
-        remaining: universe.size - miss,
+        remaining: universe.length - miss,
         waves: [],
       };
     }
@@ -491,8 +601,8 @@ export async function buildBigDogReport(
       racesCount: racesArr.length,
       sagProviderOptOuts: sagProvider.size,
       ngbProviderOptOuts: ngbProvider.size,
-      p2pSag: p2pSag.size,
-      p2pNgb: p2pNgb.size,
+      p2pSag: p2pSagSeen,
+      p2pNgb: p2pNgbSeen,
       sendListsFound,
       sendListsMissing,
     },

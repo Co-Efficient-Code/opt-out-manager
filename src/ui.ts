@@ -161,6 +161,7 @@ th{color:var(--muted);font-weight:600}
     <div class="tab" data-tab="manualdrop">Manual drop</div>
     <div class="tab" data-tab="uploaded">Uploaded lists</div>
     <div class="tab" data-tab="browse">Browse buckets</div>
+    <div class="tab" data-tab="bigdog">Big Dog report</div>
     <div class="tab" data-tab="docs">Documentation</div>
   </div>
 
@@ -314,6 +315,39 @@ th{color:var(--muted);font-weight:600}
   </div>
 
   <!-- DOCS -->
+  <!-- BIG DOG REPORT -->
+  <div id="bigdog" class="hide">
+    <div class="card">
+      <h2>Big Dog MMS Report by Race &amp; PAC</h2>
+      <p class="sub">Pulls live opt-outs (ReadyGOP + co/nnect + P2P S3 bucket), scrubs each wave's send list, and builds the report. Texts Sent shows "-" until the Sales Tracker is wired. Reporting only: no email, no bucket writes.</p>
+      <div class="row">
+        <button class="btn" id="bd-run">Run report</button>
+        <span id="bd-status" class="muted"></span>
+      </div>
+      <div id="bd-result" class="hide">
+        <div class="stats" style="margin-top:16px">
+          <div class="stat"><div class="n" id="bd-s-races">-</div><div class="l">Races</div></div>
+          <div class="stat"><div class="n warn" id="bd-s-opt">-</div><div class="l">Opt Outs (union)</div></div>
+          <div class="stat"><div class="n" id="bd-s-lists">-</div><div class="l">Send lists found</div></div>
+          <div class="stat"><div class="n" id="bd-s-missing">-</div><div class="l">Send lists missing</div></div>
+        </div>
+        <div id="bd-warn" class="note hide"></div>
+        <div class="row" style="margin-top:16px">
+          <a class="btn" id="bd-download" href="/api/bigdog/download">Download HTML</a>
+          <button class="btn ghost" id="bd-refresh-preview">Refresh preview</button>
+        </div>
+        <div style="margin-top:16px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#fff">
+          <iframe id="bd-preview" title="Big Dog report preview" style="width:100%;height:760px;border:0;display:block;background:#fff"></iframe>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Race names</h2>
+      <p class="sub">Clean display name + sort order per race. Unknown races auto-get a default (editable here) the first time they appear. Run the report first to discover new races.</p>
+      <div id="bd-races"><span class="muted">Run the report to load races.</span></div>
+    </div>
+  </div>
+
   <div id="docs" class="hide">
     <div class="card">
       <h2>File standards</h2>
@@ -491,6 +525,8 @@ document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
   $('#docs').classList.toggle('hide',t.dataset.tab!=='docs');
   $('#browse').classList.toggle('hide',t.dataset.tab!=='browse');
   $('#uploaded').classList.toggle('hide',t.dataset.tab!=='uploaded');
+  $('#bigdog').classList.toggle('hide',t.dataset.tab!=='bigdog');
+  if(t.dataset.tab==='bigdog')bdLoadRaces();
   if(t.dataset.tab==='browse')loadBrowse();
   if(t.dataset.tab==='uploaded')loadUploaded();
   if(t.dataset.tab==='runlogs')loadRunHistory();
@@ -1220,6 +1256,63 @@ $('#md-commit').onclick=async function(){
 };
 
 loadAccounts();
+
+// --- Big Dog report ---
+function bdNum(n){return (typeof n==='number')?n.toLocaleString():'-';}
+async function bdLoadRaces(){
+  var el=$('#bd-races');
+  var d;try{d=await jsonFetch('/api/bigdog/races');}catch(e){el.innerHTML='<span class="muted">Could not load races: '+e.message+'</span>';return;}
+  var rows=(d.races||[]);
+  if(!rows.length){el.innerHTML='<span class="muted">No races yet. Run the report to discover them.</span>';return;}
+  var h='<table><thead><tr><th style="width:18%">Key</th><th>Display name</th><th style="width:14%">Order</th><th style="width:12%"></th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    var tag=r.named?'':' <span class="muted" style="font-size:11px">(auto)</span>';
+    h+='<tr data-key="'+r.key+'">'+
+      '<td><code class="mono">'+r.key+'</code>'+tag+'</td>'+
+      '<td><input type="text" class="bd-rn-name" value="'+(r.name||'').replace(/"/g,'&quot;')+'"></td>'+
+      '<td><input type="text" class="bd-rn-order" value="'+(r.order!=null?r.order:'')+'" style="text-align:right"></td>'+
+      '<td><button class="btn ghost bd-rn-save" style="padding:8px 12px">Save</button></td>'+
+    '</tr>';
+  });
+  h+='</tbody></table>';
+  el.innerHTML=h;
+  el.querySelectorAll('.bd-rn-save').forEach(function(b){
+    b.onclick=async function(){
+      var tr=b.closest('tr');var key=tr.getAttribute('data-key');
+      var name=tr.querySelector('.bd-rn-name').value;
+      var order=parseInt(tr.querySelector('.bd-rn-order').value,10);
+      b.disabled=true;b.textContent='...';
+      try{await jsonFetch('/api/bigdog/races',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:key,name:name,order:isNaN(order)?null:order})});b.textContent='Saved';setTimeout(function(){b.textContent='Save';b.disabled=false;},1200);}
+      catch(e){b.textContent='Error';b.disabled=false;alert('Save failed: '+e.message);}
+    };
+  });
+}
+function bdRefreshPreview(){
+  var f=$('#bd-preview');f.src='/api/bigdog/preview?t='+Date.now();
+}
+$('#bd-refresh-preview').onclick=bdRefreshPreview;
+$('#bd-run').onclick=async function(){
+  var btn=$('#bd-run'),st=$('#bd-status');
+  btn.disabled=true;st.innerHTML='<span class="spin"></span>Building report (pulling ReadyGOP + co/nnect + P2P, scrubbing send lists)...';
+  $('#bd-result').classList.add('hide');
+  var d;
+  try{d=await jsonFetch('/api/bigdog/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})});}
+  catch(e){st.innerHTML='<span class="bad">Build failed: '+e.message+'</span>';btn.disabled=false;return;}
+  var s=d.stats||{};
+  $('#bd-s-races').textContent=bdNum(s.racesCount);
+  $('#bd-s-opt').textContent=bdNum(s.optOutsTotal);
+  $('#bd-s-lists').textContent=bdNum(s.sendListsFound);
+  $('#bd-s-missing').textContent=bdNum(s.sendListsMissing);
+  var warnEl=$('#bd-warn');
+  var warns=(d.warnings||[]);
+  if(warns.length){warnEl.innerHTML='<b>Notes:</b><br>'+warns.map(function(w){return '&bull; '+w;}).join('<br>');warnEl.classList.remove('hide');}
+  else{warnEl.classList.add('hide');}
+  $('#bd-result').classList.remove('hide');
+  st.innerHTML='<span style="color:#4ade80">Done.</span> Built '+bdNum(s.racesCount)+' races, updated '+(d.updated||'')+'.';
+  bdRefreshPreview();
+  bdLoadRaces();
+  btn.disabled=false;
+};
 </script>
 </body></html>`;
 }

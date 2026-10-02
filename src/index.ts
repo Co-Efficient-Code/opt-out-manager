@@ -13,6 +13,14 @@ import { loadRunHistory, loadLastRunLog } from './runhistory';
 import { runOptOutSync, commitRunLog } from './runner';
 import { parseUploadCsv, buildRunLog } from './runlogs';
 import { renderApp } from './ui';
+import {
+  buildBigDogReport,
+  renderBigDogHtml,
+  loadRaceTable,
+  setRaceName,
+  defaultRaceName,
+  type BuildResult,
+} from './bigdogreport';
 
 type Variables = { user: SessionUser };
 
@@ -701,6 +709,96 @@ api.post('/mapping', async (c) => {
   try {
     const overrides = await setOverride(c.env, project, pac, destination);
     return c.json({ ok: true, project, pac, destination, overrides });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 400);
+  }
+});
+
+// --- Big Dog report -------------------------------------------------------
+// In-memory cache of the last build (per isolate). Preview/download read this
+// after a Run. Reporting only: NO email, NO S3 write.
+let lastBigDogBuild: BuildResult | null = null;
+
+// Build the report now. Returns the summary (stats + warnings); the full HTML is
+// fetched via /preview or /download so the JSON stays small.
+api.post('/bigdog/run', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({} as Record<string, unknown>));
+    const updated = body && typeof (body as any).updated === 'string' ? (body as any).updated : undefined;
+    const result = await buildBigDogReport(c.env, { updated });
+    lastBigDogBuild = result;
+    return c.json({
+      ok: true,
+      title: result.title,
+      updated: result.updated,
+      generatedAt: result.generatedAt,
+      stats: result.stats,
+      warnings: result.warnings,
+      unknownRaceKeys: result.unknownRaceKeys,
+      races: result.races.map((r) => ({
+        key: r.key,
+        name: r.name,
+        order: r.order,
+        pacs: Object.keys(r.pacs),
+      })),
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// Inline HTML preview of the last build.
+api.get('/bigdog/preview', (c) => {
+  if (!lastBigDogBuild) return c.text('No report built yet. Click Run first.', 404);
+  return c.html(renderBigDogHtml(lastBigDogBuild));
+});
+
+// Download the last build as an HTML attachment.
+api.get('/bigdog/download', (c) => {
+  if (!lastBigDogBuild) return c.text('No report built yet. Click Run first.', 404);
+  const html = renderBigDogHtml(lastBigDogBuild);
+  const stamp = (lastBigDogBuild.generatedAt || '').replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '_');
+  return c.body(html, 200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Disposition': `attachment; filename="BigDog_MMS_Report_${stamp || 'latest'}.html"`,
+  });
+});
+
+// Race-name table: list current names (incl. auto-defaults for unknown keys seen
+// in the last build).
+api.get('/bigdog/races', async (c) => {
+  try {
+    const table = await loadRaceTable(c.env);
+    const rows: { key: string; name: string; order: number; named: boolean }[] = [];
+    const seen = new Set<string>();
+    for (const [key, e] of Object.entries(table)) {
+      rows.push({ key, name: e.name, order: e.order, named: true });
+      seen.add(key);
+    }
+    if (lastBigDogBuild) {
+      for (const r of lastBigDogBuild.races) {
+        if (seen.has(r.key)) continue;
+        rows.push({ key: r.key, name: defaultRaceName(r.key), order: r.order, named: false });
+        seen.add(r.key);
+      }
+    }
+    rows.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+    return c.json({ ok: true, races: rows });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// Set/clear a race display name + order.
+api.post('/bigdog/races', async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const key = body.key ? String(body.key) : '';
+  const name = body.name ? String(body.name) : '';
+  const order = typeof body.order === 'number' ? body.order : (body.order ? parseInt(String(body.order), 10) : null);
+  if (!key) return c.json({ ok: false, error: 'missing key' }, 400);
+  try {
+    const table = await setRaceName(c.env, key, name, Number.isNaN(order as number) ? null : order);
+    return c.json({ ok: true, races: table });
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 400);
   }

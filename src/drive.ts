@@ -96,6 +96,17 @@ export async function driveList(env: Env, folderId: string): Promise<DriveFile[]
   return ((await res.json()) as { files: DriveFile[] }).files || [];
 }
 
+/** Download a Drive file's raw bytes as text (read-only, alt=media). */
+export async function driveDownloadText(env: Env, fileId: string): Promise<string> {
+  const token = await getAccessToken(env);
+  const url =
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}` +
+    `?alt=media&supportsAllDrives=true`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`Drive download error: ${res.status} ${await res.text()}`);
+  return res.text();
+}
+
 /**
  * Upload CSV content as a file into a folder. Returns the created file id.
  * (No overwrite protection at Drive level; Drive allows same-named files.)

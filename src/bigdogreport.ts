@@ -48,11 +48,27 @@ function normWs(s: string | null | undefined): string {
   return (s || '').replace(/\t/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-/** Canonicalize a race fragment to a stable key (CD/District variants collapse). */
+/**
+ * Canonicalize a race fragment to a stable key so naming variants collapse to
+ * ONE key (and therefore one report row). Handles:
+ *   - CD / District  ->  dropped ("NM CD 02", "NM 02", "NM 2nd District" => "NM 02")
+ *   - SEN / SENATE    ->  "SENATE"   ("GA Sen", "GA Senate" => "GA SENATE")
+ *   - GOV / GOVERNOR  ->  "GOVERNOR"
+ *   - zero-padded 2-digit district numbers ("9" => "09")
+ * Two race fragments that mean the same race MUST yield the same key here, so
+ * the registry merges them automatically (no manual merge needed in the UI).
+ */
 export function raceKey(rawRace: string): string {
   let s = normWs(rawRace).toUpperCase();
   s = s.replace(/ CD /g, ' ').replace(/ DISTRICT/g, '');
   s = s.replace(/\bCD0?(\d+)/g, '$1'); // CD09 -> 9
+  // Expand common chamber abbreviations to a single canonical token.
+  s = s.replace(/\bSEN\b/g, 'SENATE').replace(/\bSENATES\b/g, 'SENATE');
+  s = s.replace(/\bGOV\b/g, 'GOVERNOR').replace(/\bGUB\b/g, 'GOVERNOR');
+  s = s.replace(/\bHSE\b/g, 'HOUSE');
+  s = s.replace(/\bATG\b/g, 'ATTORNEY GENERAL').replace(/\bAG\b/g, 'ATTORNEY GENERAL');
+  // Ordinal suffixes on district numbers: "2ND", "22ND" -> bare number.
+  s = s.replace(/\b(\d+)(ST|ND|RD|TH)\b/g, '$1');
   s = s.replace(/\b0*(\d+)\b/g, (_m, n) => String(parseInt(n, 10)).padStart(2, '0')); // zero-pad -> 02
   return normWs(s);
 }

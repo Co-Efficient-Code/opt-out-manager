@@ -19,6 +19,7 @@ import {
   loadRaceTable,
   setRaceName,
   defaultRaceName,
+  raceKey as bigdogRaceKey,
   type BuildResult,
 } from './bigdogreport';
 
@@ -757,6 +758,9 @@ api.post('/bigdog/run', async (c) => {
           try {
             await c.env.OPTOUT_MAPPING.put(BIGDOG_HTML_KEY, html);
             await c.env.OPTOUT_MAPPING.put(BIGDOG_META_KEY, JSON.stringify(meta));
+            // Persist the race keys so the race-name editor works cross-isolate.
+            await c.env.OPTOUT_MAPPING.put('bigdog:last_races',
+              JSON.stringify(result.races.map((r) => ({ key: r.key, order: r.order }))));
           } catch (e) {
             send({ type: 'progress', phase: 'save', message: `KV save warning: ${e instanceof Error ? e.message : String(e)}` });
           }
@@ -816,19 +820,27 @@ api.get('/bigdog/download', async (c) => {
 api.get('/bigdog/races', async (c) => {
   try {
     const table = await loadRaceTable(c.env);
-    const rows: { key: string; name: string; order: number; named: boolean }[] = [];
-    const seen = new Set<string>();
+    // Re-canonicalize every stored key so legacy/variant keys (e.g. "GA SEN")
+    // collapse onto the current canonical key ("GA SENATE"). If two stored keys
+    // collapse together, the lower-order / named one wins. This also hides ghost
+    // rows left over from before the canonicalization was tightened.
+    const byKey = new Map<string, { name: string; order: number; named: boolean }>();
     for (const [key, e] of Object.entries(table)) {
-      rows.push({ key, name: e.name, order: e.order, named: true });
-      seen.add(key);
+      const ck = bigdogRaceKey(key);
+      const prev = byKey.get(ck);
+      if (!prev || e.order < prev.order) byKey.set(ck, { name: e.name, order: e.order, named: true });
     }
-    if (lastBigDogBuild) {
-      for (const r of lastBigDogBuild.races) {
-        if (seen.has(r.key)) continue;
-        rows.push({ key: r.key, name: defaultRaceName(r.key), order: r.order, named: false });
-        seen.add(r.key);
-      }
+    // Union with races actually present in the last build (source of truth for
+    // which races exist right now). Unknown ones get an auto-default name.
+    const metaRaw = c.env.OPTOUT_MAPPING ? await c.env.OPTOUT_MAPPING.get('bigdog:last_races') : null;
+    const buildRaces: { key: string; order: number }[] =
+      lastBigDogBuild?.races.map((r) => ({ key: r.key, order: r.order })) ||
+      (metaRaw ? (JSON.parse(metaRaw) as { key: string; order: number }[]) : []);
+    for (const r of buildRaces) {
+      const ck = bigdogRaceKey(r.key);
+      if (!byKey.has(ck)) byKey.set(ck, { name: defaultRaceName(ck), order: r.order, named: false });
     }
+    const rows = [...byKey.entries()].map(([key, v]) => ({ key, name: v.name, order: v.order, named: v.named }));
     rows.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     return c.json({ ok: true, races: rows });
   } catch (e) {

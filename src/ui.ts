@@ -68,11 +68,12 @@ select,input[type=file],input[type=text]{width:100%;background:#0a1628;border:1p
 .fcol label{margin-top:0}
 /* 4-up column-mapping row */
 .kmap4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:12px}
+.kmap3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px}
 .kmcol{min-width:0;display:flex;flex-direction:column;gap:5px}
 .kmlbl{font-size:12px;color:var(--muted)}
 .req{color:var(--accent);font-weight:700}
 .kmcol select.bad{border-color:var(--accent)}
-@media(max-width:720px){.frow3{grid-template-columns:1fr}.kmap4{grid-template-columns:1fr 1fr}}
+@media(max-width:720px){.frow3{grid-template-columns:1fr}.kmap4{grid-template-columns:1fr 1fr}.kmap3{grid-template-columns:1fr 1fr}}
 .muted{color:var(--muted)} .hide{display:none}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes s{to{transform:rotate(360deg)}}
@@ -195,6 +196,12 @@ th{color:var(--muted);font-weight:600}
           <div class="kmcol"><span class="kmlbl">FirstName <span class="req">*</span></span><select class="s-map" id="s-map-firstname" data-field="FirstName"></select></div>
           <div class="kmcol"><span class="kmlbl">LastName <span class="req">*</span></span><select class="s-map" id="s-map-lastname" data-field="LastName"></select></div>
           <div class="kmcol"><span class="kmlbl">SelectName <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-selectname" data-field="SelectName"></select></div>
+        </div>
+        <label style="margin-top:12px">Pass-through columns <span class="muted" style="font-weight:400">(optional; included automatically when present in your file)</span></label>
+        <div class="kmap3">
+          <div class="kmcol"><span class="kmlbl">earlyVote_Location <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-earlyvote_location" data-field="earlyVote_Location"></select></div>
+          <div class="kmcol"><span class="kmlbl">earlyVote_address <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-earlyvote_address" data-field="earlyVote_address"></select></div>
+          <div class="kmcol"><span class="kmlbl">earlyVote_City <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-earlyvote_city" data-field="earlyVote_City"></select></div>
         </div>
         <div class="note hide" id="s-map-warn"></div>
       </div>
@@ -560,11 +567,14 @@ const S_MAP_ALIASES={
   CellPhone:['cellphone','cell phone','phone','phonenumber','phone number','cell','mobile','phone_number'],
   FirstName:['firstname','first name','first','fname'],
   LastName:['lastname','last name','last','lname'],
-  SelectName:['selectname','select name','select']
+  SelectName:['selectname','select name','select'],
+  earlyVote_Location:['earlyvote_location','earlyvote location','early vote location','ev location','evlocation'],
+  earlyVote_address:['earlyvote_address','earlyvote address','early vote address','ev address','evaddress'],
+  earlyVote_City:['earlyvote_city','earlyvote city','early vote city','ev city','evcity']
 };
 const S_MAP_REQUIRED=['CellPhone','FirstName','LastName'];
 // Output order for kept columns:
-const S_MAP_ORDER=['SelectName','FirstName','LastName','CellPhone'];
+const S_MAP_ORDER=['SelectName','FirstName','LastName','CellPhone','earlyVote_Location','earlyVote_address','earlyVote_City'];
 let sHeaderCols=[];
 function sMapSelId(field){return '#s-map-'+field.toLowerCase();}
 // Read the uploaded file's header (CSV or XLSX) and populate the mapping dropdowns.

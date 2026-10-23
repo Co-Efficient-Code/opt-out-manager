@@ -845,9 +845,11 @@ $('#s-run').onclick=async()=>{
   const evStat=$('#r-ev-stat');const evNote=$('#r-ev-note');const ev=d.earlyVote;
   if(ev&&ev.ran){
     evStat.classList.remove('hide');$('#r-ev').textContent=(ev.removed||0).toLocaleString();
-    let note='Early-vote scrub ('+ev.state+'): removed '+(ev.removed||0).toLocaleString()+' already-voted voters, matched against '+(ev.universeSize||0).toLocaleString()+' early-vote cell phones';
+    const asOf=ev.dataAsOf?ev.dataAsOf.slice(0,10):'unknown date';
+    let note='Early-vote scrub ('+ev.state+'): removed '+(ev.removed||0).toLocaleString()+' already-voted voters, matched against '+(ev.universeSize||0).toLocaleString()+' early-vote cell phones (data as of '+asOf+')';
     if(ev.castStatuses&&ev.castStatuses.length)note+=' ['+ev.castStatuses.join(', ')+']';
     note+='.';
+    if(ev.stale)note+=' \u26a0 This early-vote data is more than a day old; the daily refresh may have missed.';
     if(ev.unmappedStatuses&&ev.unmappedStatuses.length)note+=' NOTE: L2 returned unrecognized statuses not counted as voted: '+ev.unmappedStatuses.join(', ')+'.';
     evNote.classList.remove('hide');evNote.textContent=note;
   }else if(ev&&ev.error){

@@ -45,6 +45,8 @@ export interface Env {
   L2_CUSTOMER_ID?: string;
   L2_API_BASE?: string;
   L2_APP?: string;
+  // Comma-separated USPS codes to refresh in the daily early-vote pull.
+  EV_STATES?: string;
 
   // Secrets - S3 sync targets (JSON-encoded BucketCreds each)
   // Source we PULL vendor opt-outs from:
@@ -57,6 +59,8 @@ export interface Env {
   SESSIONS?: KVNamespace;
   // Project -> (pac, destination) mapping overrides (human-assigned).
   OPTOUT_MAPPING?: KVNamespace;
+  // Early-vote cache: daily already-voted phone sets per state (R2).
+  EV_CACHE?: R2Bucket;
 }
 
 export interface SessionUser {

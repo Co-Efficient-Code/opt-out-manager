@@ -1,7 +1,7 @@
 import type { Env } from './types';
 import { getObject } from './s3';
 import { filesForOrg } from './accounts';
-import { l2Config, pullEarlyVoters } from './l2';
+import { readCachedState } from './evcache';
 
 /**
  * Read a byte stream as text lines without holding the whole file in memory.
@@ -210,12 +210,14 @@ export interface StreamScrubOptions {
 export interface EarlyVoteScrub {
   ran: boolean;
   state: string;
-  universeSize: number;   // already-voted cell phones pulled from L2
+  universeSize: number;   // already-voted cell phones in the cached set
   removed: number;        // rows removed from the list because they already voted
   block: string;          // the L2 block code used (churn audit)
   castStatuses: string[]; // the cast statuses present in the state
   unmappedStatuses: string[];
-  error?: string;         // set when the EV scrub could not run (L2 down / key)
+  dataAsOf: string;       // ISO timestamp the cached set was pulled from L2
+  stale: boolean;         // cached set older than the staleness threshold
+  error?: string;         // set when the EV scrub could not run (no cache yet)
 }
 
 export async function scrubContactsStreaming(
@@ -240,28 +242,30 @@ export async function scrubContactsStreaming(
   let evPhones: Set<string> | null = null;
   const ev: EarlyVoteScrub = {
     ran: false, state: opts.evState || '', universeSize: 0, removed: 0,
-    block: '', castStatuses: [], unmappedStatuses: [],
+    block: '', castStatuses: [], unmappedStatuses: [], dataAsOf: '', stale: false,
   };
   if (opts.evState) {
-    const cfg = l2Config(env);
-    if (!cfg) {
-      ev.error = 'L2 is not configured (no API key); early-vote scrub skipped.';
-      await emit('Early-vote scrub skipped: L2 not configured.');
-    } else {
-      try {
-        await emit(`Scrubbing early voters: pulling ${opts.evState} already-voted universe from L2...`);
-        const r = await pullEarlyVoters(cfg, opts.evState, { onProgress: emit });
-        evPhones = r.phones;
+    try {
+      await emit(`Scrubbing early voters: loading ${opts.evState} already-voted list...`);
+      const cached = await readCachedState(env, opts.evState);
+      if (!cached) {
+        ev.error = `No early-vote data cached for ${opts.evState} yet (the daily L2 pull has not run for this state).`;
+        await emit(`Early-vote scrub skipped: ${ev.error}`);
+      } else {
+        evPhones = cached.phones;
         ev.ran = true;
-        ev.universeSize = r.phones.size;
-        ev.block = r.block;
-        ev.castStatuses = r.castStatuses;
-        ev.unmappedStatuses = r.unmappedStatuses;
-        await emit(`Early-vote universe: ${r.phones.size.toLocaleString()} already-voted cell phones in ${opts.evState}.`);
-      } catch (e) {
-        ev.error = e instanceof Error ? e.message : String(e);
-        await emit(`Early-vote scrub FAILED (list still scrubbed against opt-outs): ${ev.error}`);
+        ev.universeSize = cached.phones.size;
+        ev.block = cached.meta.block;
+        ev.castStatuses = cached.meta.castStatuses;
+        ev.unmappedStatuses = cached.meta.unmappedStatuses;
+        ev.dataAsOf = cached.meta.pulledAt;
+        ev.stale = cached.stale;
+        const asOf = cached.meta.pulledAt ? ` (as of ${cached.meta.pulledAt.slice(0, 10)})` : '';
+        await emit(`Early-vote list: ${cached.phones.size.toLocaleString()} already-voted cell phones in ${opts.evState}${asOf}.`);
       }
+    } catch (e) {
+      ev.error = e instanceof Error ? e.message : String(e);
+      await emit(`Early-vote scrub FAILED (list still scrubbed against opt-outs): ${ev.error}`);
     }
   }
 

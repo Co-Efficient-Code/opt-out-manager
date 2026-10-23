@@ -11,6 +11,7 @@ import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './dri
 import { loadOverrides, setOverride, cleanName, PAC_SLUGS, DESTINATIONS, type OverrideMap } from './mapping';
 import { loadRunHistory, loadLastRunLog } from './runhistory';
 import { runOptOutSync, commitRunLog } from './runner';
+import { refreshAll, evStates } from './evcache';
 import { parseUploadCsv, buildRunLog } from './runlogs';
 import { renderApp } from './ui';
 
@@ -68,6 +69,34 @@ app.post('/cron/run', async (c) => {
       quarantinedProjects: log.quarantined.length,
       emailSent: email.sent,
       emailError: email.error,
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// CRON TRIGGER: daily early-vote refresh. Pulls each configured state's
+// already-voted universe from L2 ONCE and caches it in R2, so the scrub tool
+// reads the cache instead of hitting L2 live. Token-guarded, mounted before the
+// Google-login middleware. Non-fatal per state.
+app.post('/cron/ev-refresh', async (c) => {
+  const secret = c.env.CRON_SECRET;
+  const auth = c.req.header('Authorization') || '';
+  const provided = auth.replace(/^Bearer\s+/i, '');
+  if (!secret || provided !== secret) {
+    return c.json({ ok: false, error: 'unauthorized' }, 401);
+  }
+  try {
+    // Optional ?states=AZ,NY to refresh a subset (lets the cron split the ~13
+    // states across a few calls if one request would run too long).
+    const only = (c.req.query('states') || '')
+      .split(',').map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z]{2}$/.test(s));
+    const { ok, failed } = await refreshAll(c.env, undefined, only.length ? only : undefined);
+    return c.json({
+      ok: true,
+      states: only.length ? only : evStates(c.env),
+      refreshed: ok.map((m) => ({ state: m.state, count: m.count, block: m.block, pulledAt: m.pulledAt })),
+      failed,
     });
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);

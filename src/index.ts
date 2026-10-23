@@ -12,6 +12,7 @@ import { loadOverrides, setOverride, cleanName, PAC_SLUGS, DESTINATIONS, type Ov
 import { loadRunHistory, loadLastRunLog } from './runhistory';
 import { runOptOutSync, commitRunLog } from './runner';
 import { refreshAll, evStates } from './evcache';
+import { l2Config } from './l2';
 import { parseUploadCsv, buildRunLog } from './runlogs';
 import { renderApp } from './ui';
 
@@ -98,6 +99,32 @@ app.post('/cron/ev-refresh', async (c) => {
       refreshed: ok.map((m) => ({ state: m.state, count: m.count, block: m.block, pulledAt: m.pulledAt })),
       failed,
     });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// DIAGNOSTIC: make ONE L2 call from the Worker (not a laptop) to confirm the
+// Worker's egress can reach L2 with the key. Token-guarded. Read-only, 1 call.
+app.post('/cron/ev-test', async (c) => {
+  const secret = c.env.CRON_SECRET;
+  const provided = (c.req.header('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!secret || provided !== secret) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  const cfg = l2Config(c.env);
+  if (!cfg) return c.json({ ok: false, error: 'L2 not configured (no L2_API_KEY)' }, 400);
+  const app2 = c.req.query('app') || cfg.app;
+  const q = new URLSearchParams({ id: cfg.customer, apikey: cfg.key });
+  const url = `${cfg.base}/customer/application/columns/${cfg.customer}/${app2}?${q.toString()}`;
+  try {
+    const res = await fetch(url);
+    const text = await res.text();
+    let j: any;
+    try { j = JSON.parse(text); } catch { j = { result: 'parse-fail', raw: text.slice(0, 200) }; }
+    const cols = Array.isArray(j.columns) ? j.columns.length : 0;
+    const blocks = Array.isArray(j.columns)
+      ? [...new Set(j.columns.map((x: any) => x.id).filter((id: string) => /^C_1A1P08[A-Z0-9]+_/.test(id)).map((id: string) => id.slice(0, 12)))]
+      : [];
+    return c.json({ ok: j.result === 'ok', httpStatus: res.status, result: j.result, message: j.message ?? null, app: app2, columns: cols, abevBlocks: blocks });
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
   }

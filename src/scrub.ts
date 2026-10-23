@@ -1,6 +1,7 @@
 import type { Env } from './types';
 import { getObject } from './s3';
 import { filesForOrg } from './accounts';
+import { l2Config, pullEarlyVoters } from './l2';
 
 /**
  * Read a byte stream as text lines without holding the whole file in memory.
@@ -197,6 +198,24 @@ export interface StreamScrubOptions {
   keepColumns?: string[];
   /** Called with a human-readable progress message at each phase. */
   onProgress?: (msg: string) => void | Promise<void>;
+  /**
+   * Early-vote (already-voted) scrub. When `evState` is set and L2 is
+   * configured, we pull that state's already-voted cell phones (statewide) and
+   * remove them from the list AFTER the opt-out scrub, matching on cell phone.
+   */
+  evState?: string | null;
+}
+
+/** Early-vote scrub stats, attached to the scrub result when the EV scrub ran. */
+export interface EarlyVoteScrub {
+  ran: boolean;
+  state: string;
+  universeSize: number;   // already-voted cell phones pulled from L2
+  removed: number;        // rows removed from the list because they already voted
+  block: string;          // the L2 block code used (churn audit)
+  castStatuses: string[]; // the cast statuses present in the state
+  unmappedStatuses: string[];
+  error?: string;         // set when the EV scrub could not run (L2 down / key)
 }
 
 export async function scrubContactsStreaming(
@@ -204,7 +223,7 @@ export async function scrubContactsStreaming(
   org: string,
   fileStream: ReadableStream<Uint8Array>,
   opts: StreamScrubOptions = {},
-): Promise<ScrubResult & { keptColumns: string[]; droppedColumns: number }> {
+): Promise<ScrubResult & { keptColumns: string[]; droppedColumns: number; earlyVote?: EarlyVoteScrub }> {
   const phoneColOverride = opts.phoneCol;
   const emit = async (m: string) => { if (opts.onProgress) await opts.onProgress(m); };
 
@@ -214,6 +233,37 @@ export async function scrubContactsStreaming(
   await emit(
     `Scrubbing against ${optOuts.size.toLocaleString()} opt-outs (${fileCount} source file${fileCount === 1 ? '' : 's'})...`,
   );
+
+  // --- Early-vote (already-voted) phone set, pulled BEFORE we stream the file so
+  // both scrubs happen in one pass. Non-fatal: if L2 is unavailable we record the
+  // error and the list still scrubs against opt-outs. ---
+  let evPhones: Set<string> | null = null;
+  const ev: EarlyVoteScrub = {
+    ran: false, state: opts.evState || '', universeSize: 0, removed: 0,
+    block: '', castStatuses: [], unmappedStatuses: [],
+  };
+  if (opts.evState) {
+    const cfg = l2Config(env);
+    if (!cfg) {
+      ev.error = 'L2 is not configured (no API key); early-vote scrub skipped.';
+      await emit('Early-vote scrub skipped: L2 not configured.');
+    } else {
+      try {
+        await emit(`Scrubbing early voters: pulling ${opts.evState} already-voted universe from L2...`);
+        const r = await pullEarlyVoters(cfg, opts.evState, { onProgress: emit });
+        evPhones = r.phones;
+        ev.ran = true;
+        ev.universeSize = r.phones.size;
+        ev.block = r.block;
+        ev.castStatuses = r.castStatuses;
+        ev.unmappedStatuses = r.unmappedStatuses;
+        await emit(`Early-vote universe: ${r.phones.size.toLocaleString()} already-voted cell phones in ${opts.evState}.`);
+      } catch (e) {
+        ev.error = e instanceof Error ? e.message : String(e);
+        await emit(`Early-vote scrub FAILED (list still scrubbed against opt-outs): ${ev.error}`);
+      }
+    }
+  }
 
   const outParts: string[] = [];
   let headerCols: string[] = [];
@@ -267,7 +317,8 @@ export async function scrubContactsStreaming(
     const p = normalizePhone(cols[phoneIdx] ?? '');
     const outLine = keepIdx === null ? line : projectLine(cols);
     if (!p) { unparseable++; outParts.push(outLine); continue; }
-    if (optOuts.has(p)) { scrubbed++; continue; }
+    if (optOuts.has(p)) { scrubbed++; continue; }        // opt-out removed first
+    if (evPhones && evPhones.has(p)) { ev.removed++; continue; } // then already-voted
     outParts.push(outLine);
   }
 
@@ -280,11 +331,12 @@ export async function scrubContactsStreaming(
     autoDetected: typeof phoneColOverride !== 'number',
     optOutSetSize: optOuts.size,
     scrubbed,
-    kept: inputRows - scrubbed,
+    kept: inputRows - scrubbed - ev.removed,
     unparseablePhones: unparseable,
     cleanedCsv: outParts.join('\n'),
     keptColumns,
     droppedColumns: Math.max(0, headerCols.length - keptColumns.length),
+    earlyVote: opts.evState ? ev : undefined,
   };
 }
 

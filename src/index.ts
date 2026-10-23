@@ -249,6 +249,10 @@ api.post('/scrub/drive', async (c) => {
   // Optional column trim: comma-separated header names to keep.
   const keepRaw = String(form.get('keepColumns') || '').trim();
   const keepColumns = keepRaw ? keepRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+  // Early-vote scrub: the (confirmed) 2-letter state to pull already-voted
+  // voters for. Empty string / absent = EV scrub off.
+  const evStateRaw = String(form.get('evState') || '').trim().toUpperCase();
+  const evState = /^[A-Z]{2}$/.test(evStateRaw) ? evStateRaw : null;
   const nm = (file.name || '').toLowerCase();
   // Client base64-encodes CSV uploads (opaque to WAF). Encoded names end in .b64.
   const isB64 = nm.endsWith('.b64');
@@ -280,6 +284,7 @@ api.post('/scrub/drive', async (c) => {
           result = await scrubContactsStreaming(c.env, org, src, {
             phoneCol,
             keepColumns,
+            evState,
             onProgress: progress,
           });
         }
@@ -324,6 +329,7 @@ api.post('/scrub/drive', async (c) => {
           unparseablePhones: result.unparseablePhones,
           keptColumns: result.keptColumns,
           droppedColumns: result.droppedColumns,
+          earlyVote: (result as { earlyVote?: unknown }).earlyVote,
         });
       } catch (e) {
         send({ error: e instanceof Error ? e.message : String(e) });

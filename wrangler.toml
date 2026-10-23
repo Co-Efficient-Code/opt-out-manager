@@ -47,6 +47,11 @@ CONNECT_API_URL = "https://txt.coefficient.org/api/v1/opt-outs/export.csv"
 DRIVE_ROOT_FOLDER = "1E8nIqiFBWzlervF0PNtBuZrGWxdqQ4mF"
 DRIVE_FOLDER_BIGDOG = "1SpcxvbNQPOFUFvwJOZoW70F1IzRg07pJ"
 DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
+# L2 early-vote scrub (statewide already-voted pull). Key is the L2_API_KEY
+# secret (wrangler secret put). These are the non-secret defaults.
+L2_CUSTOMER_ID = "1QEP"
+L2_API_BASE = "https://api.l2datamapping.com/api/v2"
+L2_APP = "VM_US"
 
 # Scheduling is driven by GitHub Actions (.github/workflows/cron.yml) hitting
 # the token-guarded /cron/run endpoint. GitHub gives visible logs and no Worker
@@ -85,6 +90,9 @@ ALLOW_S3_WRITES = "true"
 DRIVE_ROOT_FOLDER = "1E8nIqiFBWzlervF0PNtBuZrGWxdqQ4mF"
 DRIVE_FOLDER_BIGDOG = "1SpcxvbNQPOFUFvwJOZoW70F1IzRg07pJ"
 DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
+L2_CUSTOMER_ID = "1QEP"
+L2_API_BASE = "https://api.l2datamapping.com/api/v2"
+L2_APP = "VM_US"
 
 # --- Secrets to set per environment (do NOT commit) ---
 # Google auth:
@@ -95,4 +103,6 @@ DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
 # wrangler secret put S3_SOURCE_P2P              --env staging   # datadash-p2p (PULL)
 # wrangler secret put S3_DEST_BIGDOG             --env staging   # datadash-bigdogstrategies (PUSH)
 # wrangler secret put S3_DEST_CREATIVEDIRECT     --env staging   # datadash-creativedirect (PUSH)
+# L2 early-vote scrub (voter-file API key; READ ONLY pulls):
+# wrangler secret put L2_API_KEY                 --env staging
 # (repeat with --env production)

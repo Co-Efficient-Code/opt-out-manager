@@ -34,6 +34,18 @@ export interface Env {
   // can trigger a run without a Google login.
   CRON_SECRET?: string;
 
+  // L2 voter-file API (early-vote scrub). READ ONLY pulls.
+  //   L2_API_KEY: the api key (secret). If unset, the early-vote scrub is
+  //   disabled (the toggle still shows but a run reports it as unavailable).
+  //   L2_CUSTOMER_ID: customer id (var, default '1QEP').
+  //   L2_API_BASE: base URL (var, default 'https://api.l2datamapping.com/api/v2').
+  //   L2_APP: application to pull (var, default 'VM_US', the national app
+  //   filtered per state).
+  L2_API_KEY?: string;
+  L2_CUSTOMER_ID?: string;
+  L2_API_BASE?: string;
+  L2_APP?: string;
+
   // Secrets - S3 sync targets (JSON-encoded BucketCreds each)
   // Source we PULL vendor opt-outs from:
   S3_SOURCE_P2P: string;

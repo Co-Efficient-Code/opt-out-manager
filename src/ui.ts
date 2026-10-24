@@ -62,17 +62,33 @@ select,input[type=file],input[type=text]{width:100%;background:#0a1628;border:1p
 .sstatus b{color:var(--text);font-weight:600}
 .srow{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:18px}
 .sprogress{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text)}
+.evrow{display:flex;align-items:center;gap:14px;margin:14px 0 4px;padding:12px 14px;background:rgba(36,94,164,.10);border:1px solid var(--border);border-radius:10px;flex-wrap:wrap}
+.evrow .evtxt{flex:1 1 220px;min-width:180px}
+.evttl{font-size:14px;font-weight:600;color:var(--text)}
+.evsub{font-size:12px;margin-top:2px}
+.evstate{display:flex;align-items:center;gap:8px}
+.evstate label{margin:0;font-size:12px;color:var(--muted)}
+.evstate select{min-width:150px}
+.evconf{font-size:12px}
+.evconf.ok{color:#2ecc71}.evconf.warn{color:var(--accent)}.evconf.bad{color:#e74c3c}
+.switch{position:relative;display:inline-block;width:46px;height:26px;flex:0 0 auto;margin:0}
+.switch input{opacity:0;width:0;height:0}
+.switch .slider{position:absolute;inset:0;cursor:pointer;background:#33456a;border-radius:26px;transition:.2s}
+.switch .slider:before{content:"";position:absolute;height:20px;width:20px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.2s}
+.switch input:checked+.slider{background:var(--accent)}
+.switch input:checked+.slider:before{transform:translateX(20px)}
 /* 3-up input row (PAC / Destination / Project) */
 .frow3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
 .fcol{min-width:0;display:flex;flex-direction:column}
 .fcol label{margin-top:0}
 /* 4-up column-mapping row */
 .kmap4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:12px}
+.kmap3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;background:#0a1628;border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px}
 .kmcol{min-width:0;display:flex;flex-direction:column;gap:5px}
 .kmlbl{font-size:12px;color:var(--muted)}
 .req{color:var(--accent);font-weight:700}
 .kmcol select.bad{border-color:var(--accent)}
-@media(max-width:720px){.frow3{grid-template-columns:1fr}.kmap4{grid-template-columns:1fr 1fr}}
+@media(max-width:720px){.frow3{grid-template-columns:1fr}.kmap4{grid-template-columns:1fr 1fr}.kmap3{grid-template-columns:1fr 1fr}}
 .muted{color:var(--muted)} .hide{display:none}
 .spin{display:inline-block;width:14px;height:14px;border:2px solid var(--muted);border-top-color:var(--accent);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes s{to{transform:rotate(360deg)}}
@@ -187,6 +203,18 @@ th{color:var(--muted);font-weight:600}
           <input type="text" id="s-project" placeholder="261187 NH Senate Big Dog SAG MMS 9.16">
         </div>
       </div>
+      <div class="evrow" id="s-ev-row">
+        <label class="switch"><input type="checkbox" id="s-ev-toggle" checked><span class="slider"></span></label>
+        <div class="evtxt">
+          <div class="evttl">Also scrub people who already voted <span class="muted" style="font-weight:400">(early voters, via L2)</span></div>
+          <div class="evsub muted" id="s-ev-sub">Removes already-voted voters from the list after opt-outs.</div>
+        </div>
+        <div class="evstate hide" id="s-ev-statewrap">
+          <label>State</label>
+          <select id="s-ev-state"></select>
+          <span class="evconf" id="s-ev-conf"></span>
+        </div>
+      </div>
       <label>Contact list (CSV or Excel)</label>
       <div class="drop" id="s-drop"><span id="s-drop-text">Drop a CSV or Excel file here or click to choose</span><input type="file" id="s-file" accept=".csv,.xlsx,.xls" class="hide"></div>
       <div id="s-keepwrap" class="hide">
@@ -196,6 +224,12 @@ th{color:var(--muted);font-weight:600}
           <div class="kmcol"><span class="kmlbl">FirstName <span class="req">*</span></span><select class="s-map" id="s-map-firstname" data-field="FirstName"></select></div>
           <div class="kmcol"><span class="kmlbl">LastName <span class="req">*</span></span><select class="s-map" id="s-map-lastname" data-field="LastName"></select></div>
           <div class="kmcol"><span class="kmlbl">SelectName <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-selectname" data-field="SelectName"></select></div>
+        </div>
+        <label style="margin-top:12px">Pass-through columns <span class="muted" style="font-weight:400">(optional; included automatically when present in your file)</span></label>
+        <div class="kmap3">
+          <div class="kmcol"><span class="kmlbl">earlyVote_Location <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-earlyvote_location" data-field="earlyVote_Location"></select></div>
+          <div class="kmcol"><span class="kmlbl">earlyVote_address <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-earlyvote_address" data-field="earlyVote_address"></select></div>
+          <div class="kmcol"><span class="kmlbl">earlyVote_City <span class="muted" style="font-weight:400">(optional)</span></span><select class="s-map" id="s-map-earlyvote_city" data-field="earlyVote_City"></select></div>
         </div>
         <div class="note hide" id="s-map-warn"></div>
       </div>
@@ -215,10 +249,12 @@ th{color:var(--muted);font-weight:600}
       <div class="stats">
         <div class="stat"><div class="n" id="r-in">0</div><div class="l">Input rows</div></div>
         <div class="stat"><div class="n warn" id="r-scrub">0</div><div class="l">Opt-outs scrubbed</div></div>
+        <div class="stat hide" id="r-ev-stat"><div class="n warn" id="r-ev">0</div><div class="l">Early voters removed</div></div>
         <div class="stat"><div class="n good" id="r-kept">0</div><div class="l">Records kept</div></div>
         <div class="stat"><div class="n" id="r-set">0</div><div class="l">PAC opt-out list size</div></div>
       </div>
       <div class="note hide" id="r-unparse"></div>
+      <div class="note hide" id="r-ev-note"></div>
     </div>
   </div>
 
@@ -585,6 +621,37 @@ function splitCsvClient(line){const out=[];let cur='',q=false;for(let i=0;i<line
 function guessPhoneCol(header){const n=header.map(h=>h.trim().toLowerCase());const c=['phone','phone number','phonenumber','cell','mobile','phone_number'];for(const x of c){const i=n.indexOf(x);if(i>=0)return i;}return n.findIndex(h=>h.includes('phone'));}
 const s=wireDrop('#s-drop','#s-file',null,'#s-run','#s-org','#s-dest');
 // Phone column is now driven by the CellPhone mapping (no separate dropdown).
+
+// ---- Early-vote (already-voted) scrub: state detect + confirm ----
+const EV_STATES={AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',CT:'Connecticut',DE:'Delaware',DC:'District of Columbia',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming'};
+(function fillEvStates(){const sel=$('#s-ev-state');if(!sel)return;sel.innerHTML='<option value="">Select state...</option>'+Object.keys(EV_STATES).map(c=>'<option value="'+c+'">'+c+' - '+EV_STATES[c]+'</option>').join('');})();
+// Client-side mirror of src/state.ts detectState (common cases; server does not re-detect, it trusts the confirmed value).
+function evDetect(text){if(!text||!text.trim())return{code:null,conf:'none'};const low=text.toLowerCase();for(const c in EV_STATES){if(low.includes(EV_STATES[c].toLowerCase()))return{code:c,conf:'high'};}
+  const toks=text.split(/[\s_\-]+|(?<=\D)(?=\d)|(?<=\d)(?=\D)/).map(t=>t.trim().toUpperCase()).filter(Boolean);
+  const noise=new Set(['CD','HD','SEN','MMS','SMS','SAG','NGB','SM','PAC','HML','GOTV','US']);
+  const ambig=new Set(['ID','OR','IN','OH','OK','HI','ME','DE','PA','MA','MD','MO','MT','MS','AL','MN','MI','CO','CA','LA']);
+  const hits=[];for(let i=0;i<toks.length;i++){const t=toks[i];if(t.length!==2||!(t in EV_STATES))continue;if(noise.has(t)&&t!=='SD')continue;const prev=toks[i-1]||'',next=toks[i+1]||'';const afterPfx=i===0||/^\d{4,}$/.test(prev)||prev==='MAGA'||prev==='BIGDOG'||/^[A-Z]{3,}$/.test(prev);const beforeDist=/^\d{1,2}$/.test(next)||['CD','HD','SEN','SENATE','GOV','STATEWIDE'].includes(next);const strong=afterPfx||beforeDist;hits.push({code:t,strong});}
+  const strong=hits.filter(h=>h.strong&&!(ambig.has(h.code)&&!h.strong));const chosen=strong[0]||hits.find(h=>!ambig.has(h.code))||hits[0];if(!chosen)return{code:null,conf:'none'};
+  const conf=chosen.strong&&hits.filter(h=>h.strong).length<=1?'high':'low';return{code:chosen.code,conf};}
+let evUserTouched=false;
+function evRefresh(){
+  const on=$('#s-ev-toggle').checked;
+  $('#s-ev-statewrap').classList.toggle('hide',!on);
+  $('#s-ev-sub').textContent=on?'Removes already-voted voters from the list after opt-outs.':'Early-vote scrub off. Only opt-outs will be removed.';
+  if(!on)return;
+  if(!evUserTouched){
+    const txt=($('#s-project').value||'')+' '+((s.file.files[0]&&s.file.files[0].name)||'');
+    const d=evDetect(txt);
+    const sel=$('#s-ev-state');const conf=$('#s-ev-conf');
+    if(d.code){sel.value=d.code;}
+    if(d.code&&d.conf==='high'){conf.className='evconf ok';conf.textContent='\u2713 detected';}
+    else if(d.code){conf.className='evconf warn';conf.textContent='\u26a0 please confirm';}
+    else{conf.className='evconf bad';conf.textContent='could not detect - pick a state';}
+  }
+}
+$('#s-ev-toggle').addEventListener('change',evRefresh);
+$('#s-ev-state').addEventListener('change',()=>{evUserTouched=true;const c=$('#s-ev-conf');c.className='evconf ok';c.textContent='\u2713 set';});
+$('#s-project').addEventListener('input',()=>{evUserTouched=false;evRefresh();});
 // Scrub drop zone: go green + show file name inside the zone once a file is chosen.
 // Keeps the <input> element stable (no innerHTML swap) so wireDrop bindings survive.
 function sFileUI(){
@@ -599,6 +666,7 @@ function sFileUI(){
     txt.textContent='Drop a CSV or Excel file here or click to choose';
   }
   sBuildKeep();
+  evRefresh();
 }
 // Output field mapping. Required fields must be mapped; SelectName is optional.
 // Auto-detect by matching common header-name aliases.
@@ -606,11 +674,14 @@ const S_MAP_ALIASES={
   CellPhone:['cellphone','cell phone','phone','phonenumber','phone number','cell','mobile','phone_number'],
   FirstName:['firstname','first name','first','fname'],
   LastName:['lastname','last name','last','lname'],
-  SelectName:['selectname','select name','select']
+  SelectName:['selectname','select name','select'],
+  earlyVote_Location:['earlyvote_location','earlyvote location','early vote location','ev location','evlocation'],
+  earlyVote_address:['earlyvote_address','earlyvote address','early vote address','ev address','evaddress'],
+  earlyVote_City:['earlyvote_city','earlyvote city','early vote city','ev city','evcity']
 };
 const S_MAP_REQUIRED=['CellPhone','FirstName','LastName'];
 // Output order for kept columns:
-const S_MAP_ORDER=['SelectName','FirstName','LastName','CellPhone'];
+const S_MAP_ORDER=['SelectName','FirstName','LastName','CellPhone','earlyVote_Location','earlyVote_address','earlyVote_City'];
 let sHeaderCols=[];
 function sMapSelId(field){return '#s-map-'+field.toLowerCase();}
 // Read the uploaded file's header (CSV or XLSX) and populate the mapping dropdowns.
@@ -740,6 +811,8 @@ function sResetForm(){
   $('#s-keepwrap').classList.add('hide');$('#s-map-warn').classList.add('hide');sHeaderCols=[];
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
   $('#s-progress').classList.add('hide');$('#s-progress-text').textContent='';
+  $('#r-ev-stat').classList.add('hide');$('#r-ev-note').classList.add('hide');
+  $('#s-ev-toggle').checked=true;evUserTouched=false;evRefresh();
   const btn=$('#s-run');btn.textContent='Scrub list';btn.classList.remove('ghost');btn.disabled=true;
   sMode='scrub';
   s.onpick();
@@ -786,6 +859,10 @@ $('#s-run').onclick=async()=>{
   if(!dest){alert('Pick a destination first (the cleaned list is saved to that Drive folder).');return;}
   if(!project){alert('Enter a project name (used as the Drive file name).');return;}
   if(!sMapValidate()){alert('Map the required output columns (CellPhone, FirstName, LastName) before scrubbing.');return;}
+  // Early-vote scrub: if on, a state must be chosen (detected or picked).
+  const evOn=$('#s-ev-toggle').checked;
+  const evState=evOn?($('#s-ev-state').value||''):'';
+  if(evOn&&!evState){alert('The early-vote scrub is on but no state is selected. Confirm the state (or turn the toggle off).');$('#s-ev-state').focus();return;}
   // Phone column index comes from the CellPhone mapping.
   const cpsel=$('#s-map-cellphone');
   const colv=(cpsel&&cpsel.value!=='')?cpsel.value:'';
@@ -798,6 +875,7 @@ $('#s-run').onclick=async()=>{
     const up=await toUploadFile(f);
     const fd=new FormData();fd.append('org',org);fd.append('dest',dest);fd.append('project',project);fd.append('file',up);if(colv!=='')fd.append('phoneCol',colv);
     const keep=sKeepColumns();if(keep!==null)fd.append('keepColumns',keep.join(','));
+    if(evState)fd.append('evState',evState);
     d=await streamScrub('/api/scrub/drive',fd,(msg)=>sProg(msg));
   }catch(e){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Scrub failed: '+e.message);return;}
   if(d.error){sProgDone();btn.textContent='Scrub list';btn.disabled=false;alert('Scrub failed: '+d.error);return;}
@@ -809,6 +887,21 @@ $('#s-run').onclick=async()=>{
   $('#r-scrub').textContent=d.scrubbed.toLocaleString();
   $('#r-kept').textContent=d.kept.toLocaleString();
   $('#r-set').textContent=d.optOutSetSize.toLocaleString();
+  // Early-vote results
+  const evStat=$('#r-ev-stat');const evNote=$('#r-ev-note');const ev=d.earlyVote;
+  if(ev&&ev.ran){
+    evStat.classList.remove('hide');$('#r-ev').textContent=(ev.removed||0).toLocaleString();
+    const asOf=ev.dataAsOf?ev.dataAsOf.slice(0,10):'unknown date';
+    let note='Early-vote scrub ('+ev.state+'): removed '+(ev.removed||0).toLocaleString()+' already-voted voters, matched against '+(ev.universeSize||0).toLocaleString()+' early-vote cell phones (data as of '+asOf+')';
+    if(ev.castStatuses&&ev.castStatuses.length)note+=' ['+ev.castStatuses.join(', ')+']';
+    note+='.';
+    if(ev.stale)note+=' \u26a0 This early-vote data is more than a day old; the daily refresh may have missed.';
+    if(ev.unmappedStatuses&&ev.unmappedStatuses.length)note+=' NOTE: L2 returned unrecognized statuses not counted as voted: '+ev.unmappedStatuses.join(', ')+'.';
+    evNote.classList.remove('hide');evNote.textContent=note;
+  }else if(ev&&ev.error){
+    evStat.classList.add('hide');
+    evNote.classList.remove('hide');evNote.textContent='Early-vote scrub did not run: '+ev.error+' (the list was still scrubbed against opt-outs).';
+  }else{evStat.classList.add('hide');evNote.classList.add('hide');}
   const u=$('#r-unparse');
   if(d.unparseablePhones>0){u.classList.remove('hide');u.textContent=d.unparseablePhones.toLocaleString()+' rows had unreadable phone numbers and were kept (not scrubbed). Check the phone column.';}
   else u.classList.add('hide');

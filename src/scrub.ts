@@ -1,6 +1,7 @@
 import type { Env } from './types';
 import { getObject } from './s3';
 import { filesForOrg } from './accounts';
+import { readCachedState } from './evcache';
 
 /**
  * Read a byte stream as text lines without holding the whole file in memory.
@@ -233,6 +234,26 @@ export interface StreamScrubOptions {
   keepColumns?: string[];
   /** Called with a human-readable progress message at each phase. */
   onProgress?: (msg: string) => void | Promise<void>;
+  /**
+   * Early-vote (already-voted) scrub. When `evState` is set and L2 is
+   * configured, we pull that state's already-voted cell phones (statewide) and
+   * remove them from the list AFTER the opt-out scrub, matching on cell phone.
+   */
+  evState?: string | null;
+}
+
+/** Early-vote scrub stats, attached to the scrub result when the EV scrub ran. */
+export interface EarlyVoteScrub {
+  ran: boolean;
+  state: string;
+  universeSize: number;   // already-voted cell phones in the cached set
+  removed: number;        // rows removed from the list because they already voted
+  block: string;          // the L2 block code used (churn audit)
+  castStatuses: string[]; // the cast statuses present in the state
+  unmappedStatuses: string[];
+  dataAsOf: string;       // ISO timestamp the cached set was pulled from L2
+  stale: boolean;         // cached set older than the staleness threshold
+  error?: string;         // set when the EV scrub could not run (no cache yet)
 }
 
 export async function scrubContactsStreaming(
@@ -240,7 +261,7 @@ export async function scrubContactsStreaming(
   org: string,
   fileStream: ReadableStream<Uint8Array>,
   opts: StreamScrubOptions = {},
-): Promise<ScrubResult & { keptColumns: string[]; droppedColumns: number }> {
+): Promise<ScrubResult & { keptColumns: string[]; droppedColumns: number; earlyVote?: EarlyVoteScrub }> {
   const phoneColOverride = opts.phoneCol;
   const emit = async (m: string) => { if (opts.onProgress) await opts.onProgress(m); };
 
@@ -250,6 +271,39 @@ export async function scrubContactsStreaming(
   await emit(
     `Scrubbing against ${optOuts.size.toLocaleString()} opt-outs (${fileCount} source file${fileCount === 1 ? '' : 's'})...`,
   );
+
+  // --- Early-vote (already-voted) phone set, pulled BEFORE we stream the file so
+  // both scrubs happen in one pass. Non-fatal: if L2 is unavailable we record the
+  // error and the list still scrubs against opt-outs. ---
+  let evPhones: Set<string> | null = null;
+  const ev: EarlyVoteScrub = {
+    ran: false, state: opts.evState || '', universeSize: 0, removed: 0,
+    block: '', castStatuses: [], unmappedStatuses: [], dataAsOf: '', stale: false,
+  };
+  if (opts.evState) {
+    try {
+      await emit(`Scrubbing early voters: loading ${opts.evState} already-voted list...`);
+      const cached = await readCachedState(env, opts.evState);
+      if (!cached) {
+        ev.error = `No early-vote data cached for ${opts.evState} yet (the daily L2 pull has not run for this state).`;
+        await emit(`Early-vote scrub skipped: ${ev.error}`);
+      } else {
+        evPhones = cached.phones;
+        ev.ran = true;
+        ev.universeSize = cached.phones.size;
+        ev.block = cached.meta.block;
+        ev.castStatuses = cached.meta.castStatuses;
+        ev.unmappedStatuses = cached.meta.unmappedStatuses;
+        ev.dataAsOf = cached.meta.pulledAt;
+        ev.stale = cached.stale;
+        const asOf = cached.meta.pulledAt ? ` (as of ${cached.meta.pulledAt.slice(0, 10)})` : '';
+        await emit(`Early-vote list: ${cached.phones.size.toLocaleString()} already-voted cell phones in ${opts.evState}${asOf}.`);
+      }
+    } catch (e) {
+      ev.error = e instanceof Error ? e.message : String(e);
+      await emit(`Early-vote scrub FAILED (list still scrubbed against opt-outs): ${ev.error}`);
+    }
+  }
 
   const outParts: string[] = [];
   let headerCols: string[] = [];
@@ -303,7 +357,8 @@ export async function scrubContactsStreaming(
     const p = normalizePhone(cols[phoneIdx] ?? '');
     const outLine = keepIdx === null ? line : projectLine(cols);
     if (!p) { unparseable++; outParts.push(outLine); continue; }
-    if (optOuts.has(p)) { scrubbed++; continue; }
+    if (optOuts.has(p)) { scrubbed++; continue; }        // opt-out removed first
+    if (evPhones && evPhones.has(p)) { ev.removed++; continue; } // then already-voted
     outParts.push(outLine);
   }
 
@@ -316,11 +371,12 @@ export async function scrubContactsStreaming(
     autoDetected: typeof phoneColOverride !== 'number',
     optOutSetSize: optOuts.size,
     scrubbed,
-    kept: inputRows - scrubbed,
+    kept: inputRows - scrubbed - ev.removed,
     unparseablePhones: unparseable,
     cleanedCsv: outParts.join('\n'),
     keptColumns,
     droppedColumns: Math.max(0, headerCols.length - keptColumns.length),
+    earlyVote: opts.evState ? ev : undefined,
   };
 }
 

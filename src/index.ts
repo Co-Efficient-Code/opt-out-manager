@@ -11,6 +11,8 @@ import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './dri
 import { loadOverrides, setOverride, cleanName, PAC_SLUGS, DESTINATIONS, type OverrideMap } from './mapping';
 import { loadRunHistory, loadLastRunLog } from './runhistory';
 import { runOptOutSync, commitRunLog } from './runner';
+import { refreshAll, evStates } from './evcache';
+import { l2Config } from './l2';
 import { parseUploadCsv, buildRunLog } from './runlogs';
 import { renderApp } from './ui';
 import {
@@ -78,6 +80,60 @@ app.post('/cron/run', async (c) => {
       emailSent: email.sent,
       emailError: email.error,
     });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// CRON TRIGGER: daily early-vote refresh. Pulls each configured state's
+// already-voted universe from L2 ONCE and caches it in R2, so the scrub tool
+// reads the cache instead of hitting L2 live. Token-guarded, mounted before the
+// Google-login middleware. Non-fatal per state.
+app.post('/cron/ev-refresh', async (c) => {
+  const secret = c.env.CRON_SECRET;
+  const auth = c.req.header('Authorization') || '';
+  const provided = auth.replace(/^Bearer\s+/i, '');
+  if (!secret || provided !== secret) {
+    return c.json({ ok: false, error: 'unauthorized' }, 401);
+  }
+  try {
+    // Optional ?states=AZ,NY to refresh a subset (lets the cron split the ~13
+    // states across a few calls if one request would run too long).
+    const only = (c.req.query('states') || '')
+      .split(',').map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z]{2}$/.test(s));
+    const { ok, failed } = await refreshAll(c.env, undefined, only.length ? only : undefined);
+    return c.json({
+      ok: true,
+      states: only.length ? only : evStates(c.env),
+      refreshed: ok.map((m) => ({ state: m.state, count: m.count, block: m.block, pulledAt: m.pulledAt })),
+      failed,
+    });
+  } catch (e) {
+    return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+});
+
+// DIAGNOSTIC: make ONE L2 call from the Worker (not a laptop) to confirm the
+// Worker's egress can reach L2 with the key. Token-guarded. Read-only, 1 call.
+app.post('/cron/ev-test', async (c) => {
+  const secret = c.env.CRON_SECRET;
+  const provided = (c.req.header('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!secret || provided !== secret) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  const cfg = l2Config(c.env);
+  if (!cfg) return c.json({ ok: false, error: 'L2 not configured (no L2_API_KEY)' }, 400);
+  const app2 = c.req.query('app') || cfg.app;
+  const q = new URLSearchParams({ id: cfg.customer, apikey: cfg.key });
+  const url = `${cfg.base}/customer/application/columns/${cfg.customer}/${app2}?${q.toString()}`;
+  try {
+    const res = await fetch(url);
+    const text = await res.text();
+    let j: any;
+    try { j = JSON.parse(text); } catch { j = { result: 'parse-fail', raw: text.slice(0, 200) }; }
+    const cols = Array.isArray(j.columns) ? j.columns.length : 0;
+    const blocks = Array.isArray(j.columns)
+      ? [...new Set(j.columns.map((x: any) => x.id).filter((id: string) => /^C_1A1P08[A-Z0-9]+_/.test(id)).map((id: string) => id.slice(0, 12)))]
+      : [];
+    return c.json({ ok: j.result === 'ok', httpStatus: res.status, result: j.result, message: j.message ?? null, app: app2, columns: cols, abevBlocks: blocks });
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);
   }
@@ -258,6 +314,10 @@ api.post('/scrub/drive', async (c) => {
   // Optional column trim: comma-separated header names to keep.
   const keepRaw = String(form.get('keepColumns') || '').trim();
   const keepColumns = keepRaw ? keepRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+  // Early-vote scrub: the (confirmed) 2-letter state to pull already-voted
+  // voters for. Empty string / absent = EV scrub off.
+  const evStateRaw = String(form.get('evState') || '').trim().toUpperCase();
+  const evState = /^[A-Z]{2}$/.test(evStateRaw) ? evStateRaw : null;
   const nm = (file.name || '').toLowerCase();
   // Client base64-encodes CSV uploads (opaque to WAF). Encoded names end in .b64.
   const isB64 = nm.endsWith('.b64');
@@ -289,6 +349,7 @@ api.post('/scrub/drive', async (c) => {
           result = await scrubContactsStreaming(c.env, org, src, {
             phoneCol,
             keepColumns,
+            evState,
             onProgress: progress,
           });
         }
@@ -333,6 +394,7 @@ api.post('/scrub/drive', async (c) => {
           unparseablePhones: result.unparseablePhones,
           keptColumns: result.keptColumns,
           droppedColumns: result.droppedColumns,
+          earlyVote: (result as { earlyVote?: unknown }).earlyVote,
         });
       } catch (e) {
         send({ error: e instanceof Error ? e.message : String(e) });

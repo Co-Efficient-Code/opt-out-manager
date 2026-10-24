@@ -34,6 +34,11 @@ cpu_ms = 300000
 binding = "OPTOUT_MAPPING"
 id = "c5678d4a97bd41f9b15feedabe68926c"
 
+# Early-vote cache: daily already-voted phone sets per state (one L2 pull/day).
+[[env.staging.r2_buckets]]
+binding = "EV_CACHE"
+bucket_name = "ev-cache-staging"
+
 [env.staging.vars]
 GOOGLE_HOSTED_DOMAIN = "coefficient.org"
 S3_REGION = "us-east-1"
@@ -47,6 +52,14 @@ CONNECT_API_URL = "https://txt.coefficient.org/api/v1/opt-outs/export.csv"
 DRIVE_ROOT_FOLDER = "1E8nIqiFBWzlervF0PNtBuZrGWxdqQ4mF"
 DRIVE_FOLDER_BIGDOG = "1SpcxvbNQPOFUFvwJOZoW70F1IzRg07pJ"
 DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
+# L2 early-vote scrub (statewide already-voted pull). Key is the L2_API_KEY
+# secret (wrangler secret put). These are the non-secret defaults.
+L2_CUSTOMER_ID = "1QEP"
+L2_API_BASE = "https://api.l2datamapping.com/api/v2"
+L2_APP = "VM_US"
+# States to refresh in the daily early-vote pull (every state both clients have
+# touched: MAGA Inc + Creative Direct). Comma-separated USPS codes.
+EV_STATES = "AL,AZ,FL,GA,MI,NH,NJ,NM,NY,PA,SC,TX,WI"
 
 # Scheduling is driven by GitHub Actions (.github/workflows/cron.yml) hitting
 # the token-guarded /cron/run endpoint. GitHub gives visible logs and no Worker
@@ -67,6 +80,11 @@ routes = [
 [env.production.limits]
 cpu_ms = 300000
 
+# Early-vote cache: daily already-voted phone sets per state (one L2 pull/day).
+[[env.production.r2_buckets]]
+binding = "EV_CACHE"
+bucket_name = "ev-cache"
+
 [[env.production.kv_namespaces]]
 binding = "OPTOUT_MAPPING"
 id = "c8cf8d1469094946beb41e22b77c22bd"
@@ -85,6 +103,10 @@ ALLOW_S3_WRITES = "true"
 DRIVE_ROOT_FOLDER = "1E8nIqiFBWzlervF0PNtBuZrGWxdqQ4mF"
 DRIVE_FOLDER_BIGDOG = "1SpcxvbNQPOFUFvwJOZoW70F1IzRg07pJ"
 DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
+L2_CUSTOMER_ID = "1QEP"
+L2_API_BASE = "https://api.l2datamapping.com/api/v2"
+L2_APP = "VM_US"
+EV_STATES = "AL,AZ,FL,GA,MI,NH,NJ,NM,NY,PA,SC,TX,WI"
 
 # --- Secrets to set per environment (do NOT commit) ---
 # Google auth:
@@ -95,4 +117,6 @@ DRIVE_FOLDER_CREATIVEDIRECT = "1uBBmWDJRD_bzcwnZHPRmDVmRvBiT0JaR"
 # wrangler secret put S3_SOURCE_P2P              --env staging   # datadash-p2p (PULL)
 # wrangler secret put S3_DEST_BIGDOG             --env staging   # datadash-bigdogstrategies (PUSH)
 # wrangler secret put S3_DEST_CREATIVEDIRECT     --env staging   # datadash-creativedirect (PUSH)
+# L2 early-vote scrub (voter-file API key; READ ONLY pulls):
+# wrangler secret put L2_API_KEY                 --env staging
 # (repeat with --env production)

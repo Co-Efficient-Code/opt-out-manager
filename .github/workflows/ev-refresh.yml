@@ -1,0 +1,59 @@
+name: Early-Vote Cache Refresh
+
+# Daily pull of each configured state's already-voted universe from L2 into R2,
+# so the Scrub a list tool reads the cache instead of hitting L2 live (one L2
+# pull/day, well under the rate limit; scrubs never touch L2).
+#
+# All the real work (L2 block discovery, statuses, export, R2 write) happens in
+# the Worker's token-guarded /cron/ev-refresh endpoint. This job is just a clock.
+
+on:
+  schedule:
+    # Daily at 08:00 UTC (~3am CDT). Early morning: EV counts are stable overnight
+    # and L2 is quiet. GitHub cron is UTC-only and best-effort (can lag minutes).
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Which environment to refresh'
+        type: choice
+        required: true
+        default: 'staging'
+        options:
+          - staging
+          - production
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger early-vote refresh
+        env:
+          STAGING_URL: ${{ secrets.OPTOUT_STAGING_URL }}
+          STAGING_CRON_SECRET: ${{ secrets.OPTOUT_STAGING_CRON_SECRET }}
+          PROD_URL: ${{ secrets.OPTOUT_PROD_URL }}
+          PROD_CRON_SECRET: ${{ secrets.OPTOUT_PROD_CRON_SECRET }}
+          # Scheduled runs refresh BOTH envs is overkill; default to production
+          # for the nightly clock, staging via manual dispatch.
+          TARGET: ${{ github.event.inputs.target || 'production' }}
+        run: |
+          set -euo pipefail
+          if [ "$TARGET" = "production" ]; then
+            URL="$PROD_URL"; SECRET="$PROD_CRON_SECRET"
+          else
+            URL="$STAGING_URL"; SECRET="$STAGING_CRON_SECRET"
+          fi
+          if [ -z "${URL:-}" ] || [ -z "${SECRET:-}" ]; then
+            echo "Missing URL or CRON secret for target=$TARGET"; exit 1
+          fi
+          echo "Triggering early-vote refresh ($TARGET) at $(date -u) ..."
+          # Pulling ~13 states through L2's >=7s gate + exports takes a while;
+          # allow a generous timeout.
+          HTTP=$(curl -sS -m 1500 -o /tmp/resp.json -w '%{http_code}' \
+            -X POST "$URL/cron/ev-refresh" \
+            -H "Authorization: Bearer $SECRET")
+          echo "HTTP $HTTP"
+          cat /tmp/resp.json
+          echo
+          # Fail the job if the endpoint returned non-2xx.
+          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ]

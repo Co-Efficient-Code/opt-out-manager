@@ -246,17 +246,24 @@ export interface RunLog {
  * Build a dry-run run-log from pulled opt-outs. Reads S3 (read-only) to
  * compute new-vs-already-reported per (pac, destination). Writes nothing.
  */
-export async function buildRunLog(
+/**
+ * Streaming run-log accumulator. Ingests rows ONE AT A TIME (addRow) so the
+ * caller never has to hold the full row array in memory -- this is the memory
+ * fix for the nightly: 126k+ RgopOptOut objects (plus co/nnect) blew the
+ * Worker's 128MB cap. Only the de-duped phone Sets + per-project counters are
+ * retained. Call finalize() once all rows are fed to do the S3 read-back and
+ * produce the RunLog.
+ */
+export interface RunLogAccumulator {
+  addRow: (r: RgopOptOut) => void;
+  finalize: (meta: { client: string; source: string; totalCount: number }) => Promise<RunLog>;
+}
+
+export async function createRunLogAccumulator(
   env: Env,
-  rows: RgopOptOut[],
-  meta: { client: string; source: string; totalCount: number },
   onPhase?: (msg: string) => void | Promise<void>,
-  // One-off, in-memory overrides (e.g. manual-drop preview mapping). These are
-  // merged ON TOP of the persisted KV overrides for THIS run only; they are
-  // never written to KV. Persisted overrides still win nothing special here -
-  // the extra map takes precedence so the human's per-drop choice applies.
   extraOverrides?: OverrideMap,
-): Promise<RunLog> {
+): Promise<RunLogAccumulator> {
   const say = async (m: string) => { if (onPhase) await onPhase(m); };
   await say('Loading saved project mappings');
   const persisted: OverrideMap = await loadOverrides(env);
@@ -265,19 +272,21 @@ export async function buildRunLog(
     : persisted;
   const ignorePhones = await loadIgnorePhones(env);
   let excludedCount = 0;
+  let inputCount = 0; // running count of ingested rows (was rows.length)
   const groups = new Map<string, Set<string>>(); // "pac|dest" -> phones
   const projectPhones = new Map<string, Set<string>>(); // project -> phones
   const quarantine = new Map<string, number>();
   const perProject = new Map<string, ProjectRow>();
 
-  for (const r of rows) {
+  const addRow = (r: RgopOptOut) => {
+    inputCount += 1;
     // Intentionally-ignored numbers: never written, never flagged. Matched by
     // exact normalized phone against the frozen ignore_phones list. Any NEW
     // blank/unknown opt-out (not on the list) still flows to quarantine below.
     const np = normalizePhone(r.phone);
     if (np && ignorePhones.has(np)) {
       excludedCount += 1;
-      continue;
+      return;
     }
     const clean = cleanName(r.project) || '(unknown)';
     const parsed = parseProject(r.project);
@@ -301,7 +310,7 @@ export async function buildRunLog(
 
     if (!pac || !destination) {
       quarantine.set(clean, (quarantine.get(clean) || 0) + 1);
-      continue;
+      return;
     }
     const p = normalizePhone(r.phone);
     if (p) {
@@ -309,7 +318,50 @@ export async function buildRunLog(
       (groups.get(gk) || groups.set(gk, new Set()).get(gk)!).add(p);
       (projectPhones.get(clean) || projectPhones.set(clean, new Set()).get(clean)!).add(p);
     }
-  }
+  };
+
+  const finalize = async (meta: { client: string; source: string; totalCount: number }): Promise<RunLog> => {
+    const rowsLen = inputCount;
+    return buildRunLogFinalize(env, say, { groups, projectPhones, quarantine, perProject, excludedCount, rowsLen }, meta);
+  };
+
+  return { addRow, finalize };
+}
+
+/**
+ * Backward-compatible array entry point. Feeds the array into the streaming
+ * accumulator, then finalizes. Other callers (manual-drop preview, etc.) keep
+ * using this unchanged; the nightly runner uses the accumulator directly to
+ * avoid ever materializing the full array.
+ */
+export async function buildRunLog(
+  env: Env,
+  rows: RgopOptOut[],
+  meta: { client: string; source: string; totalCount: number },
+  onPhase?: (msg: string) => void | Promise<void>,
+  extraOverrides?: OverrideMap,
+): Promise<RunLog> {
+  const acc = await createRunLogAccumulator(env, onPhase, extraOverrides);
+  for (const r of rows) acc.addRow(r);
+  return acc.finalize(meta);
+}
+
+// Shared finalize: S3 read-back + RunLog assembly. Split out so both the
+// streaming accumulator and the array wrapper share identical behavior.
+async function buildRunLogFinalize(
+  env: Env,
+  say: (m: string) => Promise<void>,
+  state: {
+    groups: Map<string, Set<string>>;
+    projectPhones: Map<string, Set<string>>;
+    quarantine: Map<string, number>;
+    perProject: Map<string, ProjectRow>;
+    excludedCount: number;
+    rowsLen: number;
+  },
+  meta: { client: string; source: string; totalCount: number },
+): Promise<RunLog> {
+  const { groups, projectPhones, quarantine, perProject, excludedCount } = state;
 
   // Read-back existing phones once per (pac, destination) folder (READ ONLY).
   const existingByKey = new Map<string, Set<string>>();
@@ -355,7 +407,7 @@ export async function buildRunLog(
     client: meta.client,
     source: meta.source,
     totalCount: meta.totalCount,
-    inputOptOuts: rows.length,
+    inputOptOuts: state.rowsLen,
     groups: groupOut,
     quarantined: [...quarantine.entries()]
       .map(([project, count]) => ({ project, count }))

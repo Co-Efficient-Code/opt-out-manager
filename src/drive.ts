@@ -107,6 +107,35 @@ export async function driveDownloadText(env: Env, fileId: string): Promise<strin
   return res.text();
 }
 
+/** The native Google mime type for Sheets (files that were opened/edited in
+ * Google and converted away from plain CSV). These cannot be fetched with
+ * alt=media; they must be EXPORTED. */
+export const GOOGLE_SHEET_MIME = 'application/vnd.google-apps.spreadsheet';
+
+/** Export a native Google Sheet as CSV text (read-only). NOTE: Sheets export
+ * returns only the FIRST tab. Our scrubbed send lists are single-tab. */
+export async function driveExportSheetCsv(env: Env, fileId: string): Promise<string> {
+  const token = await getAccessToken(env);
+  const url =
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}` +
+    `/export?mimeType=text/csv&supportsAllDrives=true`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) throw new Error(`Drive export error: ${res.status} ${await res.text()}`);
+  return res.text();
+}
+
+/** Download a send-list file as CSV text regardless of whether it is a real CSV
+ * (alt=media) or a native Google Sheet (export). Branch on mimeType so files
+ * that were opened in Google and converted to Sheets still get ingested. */
+export async function driveDownloadCsvText(
+  env: Env,
+  fileId: string,
+  mimeType?: string,
+): Promise<string> {
+  if (mimeType === GOOGLE_SHEET_MIME) return driveExportSheetCsv(env, fileId);
+  return driveDownloadText(env, fileId);
+}
+
 /**
  * Upload CSV content as a file into a folder. Returns the created file id.
  * (No overwrite protection at Drive level; Drive allows same-named files.)

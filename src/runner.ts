@@ -1,8 +1,7 @@
 import type { Env } from './types';
-import { pullOptOuts, MAGA_CLIENT } from './rgop';
-import { pullConnectOptOuts, connectConfigured } from './connect';
-import { buildRunLog, buildRunEmail, buildOutputFiles, normalizePhone, type RunLog, type SourceBreakdown } from './runlogs';
-import type { RgopOptOut } from './rgop';
+import { pullOptOutsParallel, MAGA_CLIENT } from './rgop';
+import { pullConnectOptOutsReduce, connectConfigured } from './connect';
+import { createRunLogAccumulator, buildRunEmail, buildOutputFiles, normalizePhone, type RunLog, type SourceBreakdown } from './runlogs';
 import { putObjectNoOverwrite } from './s3';
 import { sendEmail } from './email';
 import { appendRunRecord, recordFromRun, saveLastRunLog } from './runhistory';
@@ -49,47 +48,33 @@ const DEFAULT_EMAIL_TO = [
   'alex@coefficient.org',
 ];
 
-/**
- * Compute the per-source input breakdown for the email. Counts are over rows
- * that carry a valid, normalizable phone (the only rows that can affect the S3
- * diff). 'overlap' = phones present in BOTH sources; 'merged' = unique phones
- * across both (what actually fed buildRunLog's per-group Sets).
- */
-function computeSourceBreakdown(
-  rgopRows: RgopOptOut[],
-  connectRows: RgopOptOut[],
-  connectStatus: SourceBreakdown['connectStatus'],
-  connectError: string | undefined,
-): SourceBreakdown {
-  const rgop = new Set<string>();
-  for (const r of rgopRows) { const p = normalizePhone(r.phone); if (p) rgop.add(p); }
-  const conn = new Set<string>();
-  for (const r of connectRows) { const p = normalizePhone(r.phone); if (p) conn.add(p); }
-  let overlap = 0;
-  for (const p of conn) if (rgop.has(p)) overlap += 1;
-  const merged = new Set<string>(rgop);
-  for (const p of conn) merged.add(p);
-  return {
-    readygop: rgop.size,
-    connect: conn.size,
-    overlap,
-    merged: merged.size,
-    connectStatus,
-    connectError,
-  };
-}
-
 export async function runOptOutSync(env: Env, opts: RunOptions): Promise<RunResult> {
   const prog = async (phase: string, message: string, extra?: Record<string, unknown>) => {
     if (opts.onProgress) await opts.onProgress(phase, message, extra);
   };
 
+  // STREAMING pull: rows are fed one at a time into the run-log accumulator and
+  // never held as a full array. This fixes BOTH nightly failure modes:
+  //   (1) 503 / Cloudflare 1102 wall-clock -> parallel batched ReadyGOP pull;
+  //   (2) "Worker exceeded memory limit" -> no 126k-row array ever materializes.
+  // Source-attribution for the email is tracked with two phone-only Sets
+  // (strings), which are far lighter than full row objects.
+  const acc = await createRunLogAccumulator(env, (msg) => prog('readback', msg));
+  const rgopPhones = new Set<string>();
+  const connPhones = new Set<string>();
+
   await prog('pull', 'Connecting to ReadyGOP...');
-  const { rows, totalCount } = await pullOptOuts(env, MAGA_CLIENT.id, {
+  const { totalCount } = await pullOptOutsParallel(env, MAGA_CLIENT.id, {
+    concurrency: 12,
+    onRow: (r) => {
+      acc.addRow(r);
+      const p = normalizePhone(r.phone);
+      if (p) rgopPhones.add(p);
+    },
     onProgress: (p) =>
       prog(
         'pull',
-        `Pulling from ReadyGOP: ${p.pulled.toLocaleString()}${p.totalCount ? ' of ' + p.totalCount.toLocaleString() : ''} opt-outs (page ${p.page})`,
+        `Pulling from ReadyGOP: ${p.pulled.toLocaleString()}${p.totalCount ? ' of ' + p.totalCount.toLocaleString() : ''} opt-outs`,
         { page: p.page, pulled: p.pulled, totalCount: p.totalCount },
       ),
   });
@@ -97,15 +82,18 @@ export async function runOptOutSync(env: Env, opts: RunOptions): Promise<RunResu
   // --- co/nnect (txt.coefficient.org) pull -------------------------------
   // Second source. NON-FATAL: if it is not configured or the pull errors, we
   // log it and proceed with ReadyGOP only, so a co/nnect outage never blocks
-  // the ReadyGOP sync. Merged + de-duped by phone below.
-  let connectRows: RgopOptOut[] = [];
+  // the ReadyGOP sync. Streamed row-by-row into the SAME accumulator (de-dup by
+  // phone per (pac,dest) is handled inside the accumulator's Sets).
   let connectStatus: SourceBreakdown['connectStatus'] = 'skipped';
   let connectError: string | undefined;
   if (connectConfigured(env)) {
     try {
       await prog('pull', 'Pulling from co/nnect...');
-      const c = await pullConnectOptOuts(env);
-      connectRows = c.rows;
+      const c = await pullConnectOptOutsReduce(env, (phone, project) => {
+        acc.addRow({ phone, project, createdAt: null, platform: 'co/nnect' });
+        const p = normalizePhone(phone);
+        if (p) connPhones.add(p);
+      });
       connectStatus = 'ok';
       await prog('pull', `co/nnect: ${c.usableRows.toLocaleString()} opt-outs (${c.totalRows.toLocaleString()} rows)`);
     } catch (e) {
@@ -117,18 +105,21 @@ export async function runOptOutSync(env: Env, opts: RunOptions): Promise<RunResu
     await prog('pull', 'co/nnect not configured (CONNECT_API_TOKEN unset); ReadyGOP only.');
   }
 
-  // Merge the two sources. buildRunLog de-dups by phone per (pac,dest) via a
-  // Set, so simple concatenation is safe; we compute the source breakdown here
-  // for the email (informational).
-  const mergedRows = rows.concat(connectRows);
-  const sourceBreakdown = computeSourceBreakdown(rows, connectRows, connectStatus, connectError);
+  // Source breakdown for the email, computed from the two phone-only Sets.
+  let overlap = 0;
+  for (const p of connPhones) if (rgopPhones.has(p)) overlap += 1;
+  const merged = new Set<string>(rgopPhones);
+  for (const p of connPhones) merged.add(p);
+  const sourceBreakdown: SourceBreakdown = {
+    readygop: rgopPhones.size,
+    connect: connPhones.size,
+    overlap,
+    merged: merged.size,
+    connectStatus,
+    connectError,
+  };
 
-  const log = await buildRunLog(
-    env,
-    mergedRows,
-    { client: MAGA_CLIENT.name, source: opts.source, totalCount },
-    (msg) => prog('readback', msg),
-  );
+  const log = await acc.finalize({ client: MAGA_CLIENT.name, source: opts.source, totalCount });
   log.sourceBreakdown = sourceBreakdown;
 
   return commitRunLog(env, log, opts);

@@ -489,6 +489,17 @@ api.get('/runlogs/dry-run', async (c) => {
   const encoder = new TextEncoder();
   const user = c.get('user');
   const appUrl = c.env.APP_URL || new URL(c.req.url).origin;
+  // UI-only recipient toggle. 'me' = send the summary email ONLY to Jacob
+  // (jacob@coefficient.org), regardless of which account is logged in -- this is
+  // the "silent" run so the full team is not alarmed by big opt-out numbers.
+  // Anything else = the full normal team list. Applies ONLY to interactive UI
+  // runs; the scheduled nightly run never passes emailTo, so it always goes to
+  // the full DEFAULT_EMAIL_TO list.
+  const recipients = (c.req.query('recipients') || 'everyone').toLowerCase();
+  const emailTo =
+    recipients === 'me'
+      ? ['jacob@coefficient.org']
+      : undefined; // undefined -> runner uses the full team distribution list
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: unknown) => controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
@@ -498,6 +509,7 @@ api.get('/runlogs/dry-run', async (c) => {
           triggeredBy: user?.email || 'unknown',
           triggeredByName: user?.name,
           source: 'readygop-live',
+          emailTo,
           onProgress: (phase, message, extra) => send({ type: 'progress', phase, message, ...(extra || {}) }),
         });
         send({ type: 'done', ok: true, dryRun: true, wrote: false, log, email });

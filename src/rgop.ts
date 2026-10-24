@@ -52,6 +52,25 @@ async function gql(env: Env, query: string, variables: unknown): Promise<any> {
   return data;
 }
 
+/**
+ * gql with bounded retry/backoff. The proxy occasionally returns a transient
+ * 5xx; with ~500 pages a single blip would fail the whole pull, so retry a few
+ * times before giving up. Keeps total added latency small.
+ */
+async function gqlRetry(env: Env, query: string, variables: unknown, attempts = 4): Promise<any> {
+  let lastErr: unknown;
+  for (let a = 0; a < attempts; a++) {
+    try {
+      return await gql(env, query, variables);
+    } catch (e) {
+      lastErr = e;
+      // linear-ish backoff: 300ms, 600ms, 900ms
+      if (a < attempts - 1) await new Promise((r) => setTimeout(r, 300 * (a + 1)));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 export interface PullProgress {
   page: number;
   pulled: number;
@@ -102,6 +121,95 @@ export async function pullOptOuts(
     seen.add(next);
     cursor = next;
   }
+  return { rows, totalCount };
+}
+
+// ReadyGOP hard-caps every page at 250 rows regardless of the requested `first`
+// (verified against the proxy). The `after` cursor is simply base64(offset), so
+// we can compute every page offset up front and fetch pages CONCURRENTLY in
+// batches instead of walking one cursor at a time. This is the fix for the
+// nightly 503 / Cloudflare 1102 (Worker exceeded wall-clock): ~500 sequential
+// 0.66s round-trips (~5.6 min) exceeded the 5-minute limit; batched concurrency
+// brings it to well under a minute.
+export const RGOP_PAGE_ROWS = 250;
+
+function offsetCursor(off: number): string {
+  // base64 of the decimal offset, matching the proxy's cursor scheme.
+  return btoa(String(off));
+}
+
+/**
+ * Parallel full pull. Step 1: one request to learn totalCount. Step 2: compute
+ * all page offsets (0, 250, 500, ...) and fetch them in concurrency-limited
+ * batches, accumulating rows. Deterministic (offset cursors), order-independent.
+ *
+ * `concurrency` controls how many pages are in flight at once (default 12).
+ * Keeps us comfortably under the Workers subrequest ceiling (~1000) since page
+ * count is ~500, and well under the wall-clock limit.
+ */
+export async function pullOptOutsParallel(
+  env: Env,
+  clientId: string,
+  opts: {
+    concurrency?: number;
+    maxRows?: number;
+    onProgress?: (p: PullProgress) => void | Promise<void>;
+    // When provided, each row is handed to onRow and NOT accumulated. This keeps
+    // memory bounded (no 126k-row array) -- used by the nightly runner, which
+    // streams rows straight into the run-log accumulator. When omitted, the full
+    // array is returned (back-compat for array callers).
+    onRow?: (r: RgopOptOut) => void;
+  } = {},
+): Promise<{ rows: RgopOptOut[]; totalCount: number }> {
+  const concurrency = Math.max(1, opts.concurrency ?? 12);
+  const filters = [{ field: 'clientId', operation: 'EQUAL', value: clientId }];
+  const streaming = typeof opts.onRow === 'function';
+
+  const mapNode = (n: any): RgopOptOut => ({
+    phone: n?.phone?.number ?? null,
+    project: (n?.project?.name ?? '').replace(/\t/g, ' ').trim(),
+    createdAt: n?.createdAt ?? null,
+    platform: 'ReadyGOP',
+  });
+  const rows: RgopOptOut[] = [];
+  let pulled = 0;
+  const take = (n: any) => {
+    const row = mapNode(n);
+    pulled += 1;
+    if (streaming) opts.onRow!(row);
+    else rows.push(row);
+  };
+
+  // Step 1: probe totalCount (and consume the first page while we're here).
+  const firstPage = await gqlRetry(env, OPTOUTS_QUERY, { first: RGOP_PAGE_ROWS, after: offsetCursor(0), f: filters });
+  const firstOO = firstPage?.data?.optOuts;
+  const totalCount: number = firstOO?.totalCount ?? 0;
+  for (const n of firstOO?.nodes || []) take(n);
+  if (opts.onProgress) await opts.onProgress({ page: 1, pulled, totalCount });
+
+  // Build the remaining page offsets (page 0 already fetched above).
+  const cap = opts.maxRows && opts.maxRows > 0 ? Math.min(opts.maxRows, totalCount) : totalCount;
+  const offsets: number[] = [];
+  for (let off = RGOP_PAGE_ROWS; off < cap; off += RGOP_PAGE_ROWS) offsets.push(off);
+
+  // Step 2: fetch remaining offsets in concurrency-limited batches. Each batch's
+  // responses are consumed then dropped, so at most `concurrency` pages of raw
+  // JSON are alive at once.
+  let done = 1; // first page counted
+  for (let i = 0; i < offsets.length; i += concurrency) {
+    const batch = offsets.slice(i, i + concurrency);
+    const results = await Promise.all(
+      batch.map((off) => gqlRetry(env, OPTOUTS_QUERY, { first: RGOP_PAGE_ROWS, after: offsetCursor(off), f: filters })),
+    );
+    for (const d of results) {
+      const oo = d?.data?.optOuts;
+      for (const n of oo?.nodes || []) take(n);
+    }
+    done += batch.length;
+    if (opts.onProgress) await opts.onProgress({ page: done, pulled, totalCount });
+    if (opts.maxRows && pulled >= opts.maxRows) break;
+  }
+
   return { rows, totalCount };
 }
 

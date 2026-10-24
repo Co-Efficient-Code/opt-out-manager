@@ -2,7 +2,8 @@ import type { Env } from './types';
 import { pullOptOutsReduce, MAGA_CLIENT } from './rgop';
 import { pullConnectOptOutsReduce, connectConfigured } from './connect';
 import { streamSourceOptOutPhones } from './scrub';
-import { driveList, driveDownloadText } from './drive';
+import { pullSalesTrackerVolume, readSheetPhoneColumn, type VolumeMap } from './sheets';
+import { driveList, driveDownloadCsvText, GOOGLE_SHEET_MIME } from './drive';
 import { MAGA_LOGO, BIGDOG_LOGO, COEFF_LOGO } from './bigdogassets';
 
 /**
@@ -197,6 +198,7 @@ interface Wave {
   optOuts: number | null; // union hits on the send list; null if no send list
   tested: number | null; // send-list size we scrubbed
   providerOptOuts: number; // provider-only count for this project (floor fallback)
+  volume: number | null; // Sales Tracker billed Volume (texts sent); null = N/A
 }
 
 interface PacBlock {
@@ -222,6 +224,9 @@ export interface BuildResult {
   unknownRaceKeys: string[];
   stats: {
     optOutsTotal: number;
+    textsSentTotal: number; // sum of known Sales Tracker volumes
+    volumesFound: number; // # waves with a populated volume
+    volumesNA: number; // # waves with no/blank volume (rendered N/A)
     racesCount: number;
     sagProviderOptOuts: number;
     ngbProviderOptOuts: number;
@@ -327,18 +332,33 @@ export async function buildBigDogReport(
   // 4. Drive send lists: list folder once, index by project number ----------
   await prog('pull', 'Listing Big Dog send lists from Drive...');
   const driveFolder = env.DRIVE_FOLDER_BIGDOG;
-  const sendListByNum = new Map<string, { id: string; name: string }>();
+  const sendListByNum = new Map<string, { id: string; name: string; mimeType?: string }>();
   if (driveFolder) {
     try {
       const files = await driveList(env, driveFolder);
       for (const f of files) {
         const num = projectNumber(f.name);
-        if (num && /\.csv$/i.test(f.name)) {
-          // Prefer a _scrubbed file if multiple share a number.
-          const existing = sendListByNum.get(num);
-          if (!existing || /_scrubbed/i.test(f.name)) {
-            sendListByNum.set(num, { id: f.id, name: f.name });
-          }
+        if (!num) continue;
+        // Accept a send list if it is EITHER a real CSV (by name or mime) OR a
+        // native Google Sheet (a CSV that was opened in Google and converted).
+        // Matching on mimeType instead of a literal ".csv" extension means files
+        // that lost their extension on Sheets conversion still get ingested.
+        const isCsv = /\.csv$/i.test(f.name) || f.mimeType === 'text/csv';
+        const isSheet = f.mimeType === GOOGLE_SHEET_MIME;
+        if (!isCsv && !isSheet) continue;
+        // Pick ONE file per project number via a stable score:
+        //   real CSV (2) beats Google Sheet (1); _scrubbed adds +4 (dominant).
+        // Higher score wins; ties keep the first seen. This guarantees a real
+        // _scrubbed CSV is never displaced by a Sheet, and a scrubbed file
+        // always beats an unscrubbed one of the same type.
+        const score = (name: string, mime?: string): number => {
+          const typeScore = mime === GOOGLE_SHEET_MIME ? 1 : 2; // CSV > Sheet
+          const scrubScore = /_scrubbed/i.test(name) ? 4 : 0;
+          return typeScore + scrubScore;
+        };
+        const existing = sendListByNum.get(num);
+        if (!existing || score(f.name, f.mimeType) > score(existing.name, existing.mimeType)) {
+          sendListByNum.set(num, { id: f.id, name: f.name, mimeType: f.mimeType });
         }
       }
     } catch (e) {
@@ -375,17 +395,47 @@ export async function buildBigDogReport(
     }
     const f = sendListByNum.get(num);
     if (!f) { sendListsMissing++; return; }
-    try {
-      const text = await driveDownloadText(env, f.id);
-      const set = sendPhonesFromCsv(text); // transient; freed after this block
-      const keys = [...set];
+    const seedKeys = (keys: string[]) => {
       wavePhones.set(num, keys);
       const map = optStatus[pacKey];
       for (const p of keys) if (!map.has(p)) map.set(p, false);
       sendListsFound++;
+    };
+    try {
+      const text = await driveDownloadCsvText(env, f.id, f.mimeType);
+      const set = sendPhonesFromCsv(text); // transient; freed after this block
+      const keys = [...set];
+      seedKeys(keys);
       await prog('build', `Loaded ${f.name} (${keys.length.toLocaleString()} phones) [${sendListsFound} lists]`);
     } catch (e) {
-      warnings.push(`send list ${num} download failed: ${e instanceof Error ? e.message : String(e)}`);
+      const msg = e instanceof Error ? e.message : String(e);
+      // A native Google Sheet over Google's ~10MB CSV-export cap can't be
+      // exported via Drive. Fall back to the Sheets values API, which paginates
+      // and has no such cap: read ONLY the phone column (bounded payload). This
+      // keeps the large first-wave lists (e.g. GA Senate 9.15) accurate even
+      // after they were opened in Google and converted to Sheets.
+      if (/exportSizeLimitExceeded/i.test(msg) && f.mimeType === GOOGLE_SHEET_MIME) {
+        try {
+          await prog('build', `${f.name} too large to export; reading phone column via Sheets API...`);
+          const raw = await readSheetPhoneColumn(env, f.id);
+          const set = new Set<string>();
+          for (const v of raw) { const p = normPhone(v); if (p) set.add(p); }
+          const keys = [...set];
+          seedKeys(keys);
+          await prog('build', `Loaded ${f.name} via Sheets API (${keys.length.toLocaleString()} phones) [${sendListsFound} lists]`);
+          return;
+        } catch (e2) {
+          const m2 = e2 instanceof Error ? e2.message : String(e2);
+          warnings.push(
+            `send list ${num} (${f.name}) is an oversized Google Sheet and the ` +
+            `Sheets-API fallback also failed: ${m2}. Re-save it as a .csv in Drive. ` +
+            `This wave is using the weaker provider per-project count.`,
+          );
+          sendListsMissing++;
+          return;
+        }
+      }
+      warnings.push(`send list ${num} (${f.name}) download failed: ${msg}`);
       sendListsMissing++;
     }
   };
@@ -477,6 +527,20 @@ export async function buildBigDogReport(
     warnings.push(`P2P no-going-back-pac scan failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
+  // 4b. Sales Tracker Volume (billing source of truth) --------------------
+  // READ ONLY. Texts Sent = Volume keyed by project number (#). Missing/blank
+  // Volume -> rendered "N/A" (and Remaining still computes from other data).
+  await prog('build', 'Reading Sales Tracker (billing volume)...');
+  let volMap: VolumeMap = { volume: new Map(), blank: new Set(), rowsScanned: 0 };
+  try {
+    volMap = await pullSalesTrackerVolume(env);
+    await prog('build', `Sales Tracker: ${volMap.volume.size} project volumes found (${volMap.blank.size} blank).`);
+  } catch (e) {
+    warnings.push(`Sales Tracker read failed (Texts Sent will show N/A): ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const volumeFor = (num: string | null): number | null =>
+    num && volMap.volume.has(num) ? volMap.volume.get(num)! : null;
+
   // Helper: count opted-out phones in a send list for a PAC.
   const countOptOuts = (pacKey: keyof typeof PACS, phones: string[]): number => {
     let h = 0;
@@ -530,6 +594,7 @@ export async function buildBigDogReport(
         optOuts,
         tested,
         providerOptOuts: providerCount,
+        volume: volumeFor(num),
       };
       const arr = byRace.get(parsed.key) || [];
       arr.push(w);
@@ -592,12 +657,19 @@ export async function buildBigDogReport(
 
   // Stats
   let optOutsTotal = 0;
+  let textsSentTotal = 0;
+  let volumesFound = 0;
+  let volumesNA = 0;
   for (const r of racesArr) {
     for (const k of PAC_ORDER) {
       const pac = r.pacs[k];
       if (!pac) continue;
       if (pac.potential) { optOutsTotal += pac.potentialOptOuts || 0; continue; }
-      for (const w of pac.waves) optOutsTotal += w.optOuts || 0;
+      for (const w of pac.waves) {
+        optOutsTotal += w.optOuts || 0;
+        if (typeof w.volume === 'number') { textsSentTotal += w.volume; volumesFound++; }
+        else volumesNA++;
+      }
     }
   }
 
@@ -614,6 +686,9 @@ export async function buildBigDogReport(
     unknownRaceKeys,
     stats: {
       optOutsTotal,
+      textsSentTotal,
+      volumesFound,
+      volumesNA,
       racesCount: racesArr.length,
       sagProviderOptOuts: sagProvider.size,
       ngbProviderOptOuts: ngbProvider.size,
@@ -649,23 +724,39 @@ function pacBlockHtml(pacName: string, pac: PacBlock | undefined, maxRows: numbe
       `<div class="val">${fmt(pac.remaining ?? null)}</div><div class="n"></div></div></div>\n`
     );
   }
-  // Texts Sent = "-" for every wave (sales tracker not wired yet).
+  // Texts Sent = Sales Tracker Volume per wave (N/A when not yet populated).
+  // Opt Outs are shown ONCE per PAC (in the pachead total), NOT per wave, to
+  // match the original report: the per-wave third column is intentionally blank.
   let wv = '';
   let optTotal = 0;
+  let volTotal = 0;
+  let anyVol = false;
   for (const w of pac.waves) {
     optTotal += w.optOuts || 0;
+    const vtxt = typeof w.volume === 'number' ? fmt(w.volume) : 'N/A';
+    if (typeof w.volume === 'number') { volTotal += w.volume; anyVol = true; }
     wv +=
       `<div class="wave"><div class="date">${w.date}</div>` +
-      `<div class="n">-</div><div class="n">${fmt(w.optOuts)}</div></div>\n`;
+      `<div class="n">${vtxt}</div><div class="n"></div></div>\n`;
   }
   wv += blank.repeat(Math.max(0, maxRows - pac.waves.length));
-  // Remaining = "-" until sales tracker provides texts_sent.
+  // Remaining = first-wave Texts Sent (Volume) - first-wave opt-outs. If the
+  // first wave's Volume is N/A, fall back to its scrubbed send-list size so
+  // Remaining still computes from the data we have. If neither exists -> N/A.
+  const w1 = pac.waves[0];
+  let remTxt = 'N/A';
+  if (w1) {
+    const base = typeof w1.volume === 'number' ? w1.volume
+      : (typeof w1.tested === 'number' ? w1.tested : null);
+    if (base !== null) remTxt = fmt(base - (w1.optOuts || 0));
+  }
+  const textsHead = anyVol ? fmt(volTotal) : 'N/A';
   return (
     `<div class="pac"><div class="pachead"><div class="pacname">${pacName}</div>` +
-    `<div class="n">-</div><div class="n">${fmt(optTotal)}</div></div>\n` +
+    `<div class="n">${textsHead}</div><div class="n">${fmt(optTotal)}</div></div>\n` +
     `${wv}` +
     `<div class="remrow"><div class="lbl">Remaining contacts</div>` +
-    `<div class="val">-</div><div class="n"></div></div></div>\n`
+    `<div class="val">${remTxt}</div><div class="n"></div></div></div>\n`
   );
 }
 

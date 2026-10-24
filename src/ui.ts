@@ -228,8 +228,16 @@ th{color:var(--muted);font-weight:600}
       <h2>Opt-out run logs</h2>
       <div class="row">
         <button class="btn" id="rl-run">Refresh Optouts</button>
+        <span class="asg-field" style="margin-left:4px">
+          <label>Summary email</label>
+          <select id="rl-recipients">
+            <option value="me" selected>Just me (jacob@coefficient.org)</option>
+            <option value="everyone">Everyone (full team list)</option>
+          </select>
+        </span>
         <span id="rl-status" class="muted"></span>
       </div>
+      <p class="sub" style="margin-top:8px">Recipient toggle applies to THIS manual run only. The nightly scheduled run always emails the full team list.</p>
       <div id="rl-summary" class="hide">
         <div class="meta" id="rl-meta" style="margin-top:16px"></div>
         <div class="stats" id="rl-stats" style="margin-top:12px"></div>
@@ -319,7 +327,7 @@ th{color:var(--muted);font-weight:600}
   <div id="bigdog" class="hide">
     <div class="card">
       <h2>Big Dog MMS Report by Race &amp; PAC</h2>
-      <p class="sub">Pulls live opt-outs (ReadyGOP + co/nnect + P2P S3 bucket), scrubs each wave's send list, and builds the report. Texts Sent shows "-" until the Sales Tracker is wired. Reporting only: no email, no bucket writes.</p>
+      <p class="sub">Pulls live opt-outs (ReadyGOP + co/nnect + P2P S3 bucket), scrubs each wave's send list, reads billed volume from the Sales Tracker (read-only), and builds the report. Waves not yet in the Sales Tracker show "N/A" for Texts Sent. Reporting only: no email, no bucket writes.</p>
       <div class="row">
         <button class="btn" id="bd-run">Run report</button>
         <span id="bd-status" class="muted"></span>
@@ -327,7 +335,9 @@ th{color:var(--muted);font-weight:600}
       <div id="bd-result" class="hide">
         <div class="stats" style="margin-top:16px">
           <div class="stat"><div class="n" id="bd-s-races">-</div><div class="l">Races</div></div>
+          <div class="stat"><div class="n good" id="bd-s-texts">-</div><div class="l">Texts Sent (billed)</div></div>
           <div class="stat"><div class="n warn" id="bd-s-opt">-</div><div class="l">Opt Outs (union)</div></div>
+          <div class="stat"><div class="n" id="bd-s-na">-</div><div class="l">Waves w/o volume (N/A)</div></div>
           <div class="stat"><div class="n" id="bd-s-lists">-</div><div class="l">Send lists found</div></div>
           <div class="stat"><div class="n" id="bd-s-missing">-</div><div class="l">Send lists missing</div></div>
         </div>
@@ -930,7 +940,8 @@ async function loadRunlogs(){
   // drops, we silently recover by polling the last saved run - no error shown.
   let d=null;
   try{
-    const r=await fetch('/api/runlogs/dry-run');
+    const rcpt=(($('#rl-recipients')||{}).value)||'me';
+    const r=await fetch('/api/runlogs/dry-run?recipients='+encodeURIComponent(rcpt));
     if(r.redirected && r.url.indexOf('/auth/login')>=0){window.location.href='/auth/login';return;}
     if(!r.body)throw new Error('no stream');
     const reader=r.body.getReader();const dec=new TextDecoder();let buf='';
@@ -1321,7 +1332,9 @@ $('#bd-run').onclick=async function(){
   }catch(e){st.innerHTML='<span class="bad">Build failed: '+e.message+'</span>';btn.disabled=false;return;}
   var s=d.stats||{};
   $('#bd-s-races').textContent=bdNum(s.racesCount);
+  $('#bd-s-texts').textContent=bdNum(s.textsSentTotal);
   $('#bd-s-opt').textContent=bdNum(s.optOutsTotal);
+  $('#bd-s-na').textContent=bdNum(s.volumesNA);
   $('#bd-s-lists').textContent=bdNum(s.sendListsFound);
   $('#bd-s-missing').textContent=bdNum(s.sendListsMissing);
   var warnEl=$('#bd-warn');

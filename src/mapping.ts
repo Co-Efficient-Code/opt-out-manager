@@ -23,7 +23,7 @@ export interface ProjectOverride {
 export type OverrideMap = Record<string, ProjectOverride>;
 
 // Canonical values the UI offers. Kept here so route + UI agree.
-export const PAC_SLUGS = ['sag-pac', 'no-going-back-pac', 'maga-inc', 'strategic-majority-pac'];
+export const PAC_SLUGS = ['sag-pac', 'no-going-back-pac', 'maga-inc', 'strategic-majority-pac', 'strong-pac'];
 export const DESTINATIONS = ['Big Dog', 'Creative Direct'];
 
 export function cleanName(name: string): string {

@@ -203,8 +203,12 @@ th{color:var(--muted);font-weight:600}
           <input type="text" id="s-project" placeholder="261187 NH Senate Big Dog SAG MMS 9.16">
         </div>
       </div>
-      <div class="evrow" id="s-ev-row">
-        <label class="switch"><input type="checkbox" id="s-ev-toggle" checked><span class="slider"></span></label>
+      <!-- Early-vote (already-voted) scrub: feature is NOT functional yet, so the
+           whole control is hidden and the toggle defaults OFF. The elements are
+           kept (hidden) so the existing scrub JS that references them still works;
+           to re-enable, remove the 'hide' class here and restore 'checked'. -->
+      <div class="evrow hide" id="s-ev-row">
+        <label class="switch"><input type="checkbox" id="s-ev-toggle"><span class="slider"></span></label>
         <div class="evtxt">
           <div class="evttl">Also scrub people who already voted <span class="muted" style="font-weight:400">(early voters, via L2)</span></div>
           <div class="evsub muted" id="s-ev-sub">Removes already-voted voters from the list after opt-outs.</div>
@@ -812,7 +816,7 @@ function sResetForm(){
   $('#s-drive-msg').classList.add('hide');$('#s-drive-msg').innerHTML='';
   $('#s-progress').classList.add('hide');$('#s-progress-text').textContent='';
   $('#r-ev-stat').classList.add('hide');$('#r-ev-note').classList.add('hide');
-  $('#s-ev-toggle').checked=true;evUserTouched=false;evRefresh();
+  $('#s-ev-toggle').checked=false;evUserTouched=false;evRefresh();
   const btn=$('#s-run');btn.textContent='Scrub list';btn.classList.remove('ghost');btn.disabled=true;
   sMode='scrub';
   s.onpick();

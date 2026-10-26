@@ -911,12 +911,25 @@ $('#s-run').onclick=async()=>{
   // Drive status from the same response
   if(d.driveOk){drLine='<span class="ok">\u2713 Saved to '+d.destinationLabel+' Drive</span> <span class="muted">as '+d.driveFileName+'</span>';}
   else{drLine='<span class="bad">\u2715 Drive save failed</span> <span class="muted">('+(d.driveError||'unknown error')+')</span>';}
-  // Download the cleaned CSV returned in the response (no second upload)
+  // Download the cleaned list. Small files come back inline (cleanedCsv) and we
+  // download straight from the response. Large files were STREAMED to Drive and
+  // are NOT echoed back (that re-buffered the whole file and caused the OOM); for
+  // those we offer a link that streams the file back from Drive on demand.
   try{
-    sProg('Downloading cleaned list...');
-    const blob=new Blob([d.cleanedCsv||''],{type:'text/csv'});
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=dlName;a.click();
-    dlLine='<span class="ok">\u2713 Downloaded</span> <b>'+dlName+'</b>';
+    if(d.cleanedCsv){
+      sProg('Downloading cleaned list...');
+      const blob=new Blob([d.cleanedCsv],{type:'text/csv'});
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=dlName;a.click();
+      dlLine='<span class="ok">\u2713 Downloaded</span> <b>'+dlName+'</b>';
+    }else if(d.streamedToDrive && d.driveOk && d.driveFileId){
+      // Large file: saved to Drive; provide a streamed-download link.
+      const url='/api/scrub/download/'+encodeURIComponent(d.driveFileId)+'?name='+encodeURIComponent(dlName);
+      dlLine='<span class="ok">\u2713 Saved to Drive</span> \u2014 <a href="'+url+'" download="'+dlName+'">Download '+dlName+'</a> <span class="muted">(large file, streamed from Drive)</span>';
+    }else if(d.streamedToDrive && !d.driveOk){
+      dlLine='<span class="bad">\u2715 Drive save failed, no local copy</span> <span class="muted">('+(d.driveError||'unknown error')+')</span>';
+    }else{
+      dlLine='<span class="muted">No cleaned file returned.</span>';
+    }
   }catch(e){dlLine='<span class="bad">\u2715 Download failed</span> <span class="muted">('+e.message+')</span>';}
   // Optional: columns-trimmed note
   let colLine='';

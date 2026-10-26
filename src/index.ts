@@ -6,7 +6,7 @@ import type { SyncRole } from './s3';
 import { scrubContacts, scrubContactsStreaming, buildOptOutSet, normalizeOptOutCsv } from './scrub';
 import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv, base64DecodeStream } from './parsefile';
-import { driveList, driveUploadCsv, driveFolderFor, type DriveDest } from './drive';
+import { driveList, driveUploadCsv, driveUploadCsvStream, driveDownloadStream, driveFolderFor, type DriveDest } from './drive';
 
 import { loadOverrides, setOverride, cleanName, PAC_SLUGS, DESTINATIONS, type OverrideMap } from './mapping';
 import { loadRunHistory, loadLastRunLog } from './runhistory';
@@ -336,45 +336,59 @@ api.post('/scrub/drive', async (c) => {
       try {
         progress('Reading file...');
         let result;
+        let driveOk = false;
+        let driveFileName: string | undefined;
+        let driveFileId: string | undefined;
+        let driveError: string | undefined;
+        const folderId = driveFolderFor(c.env, dest as DriveDest);
+
         if (isSpreadsheet) {
-          // Raw spreadsheet posted directly: buffer-convert then scrub.
+          // Raw spreadsheet posted directly: buffer-convert then scrub (small files).
           const csv = await fileToCsv(file);
           const r = await scrubContacts(c.env, org, csv, phoneCol);
           result = { ...r, keptColumns: [] as string[], droppedColumns: 0 };
+          progress(`Saving to ${destMap[dest]} Google Drive...`);
+          try {
+            const saved = await driveUploadCsv(c.env, folderId, fileName, result.cleanedCsv);
+            driveOk = true; driveFileName = saved.name; driveFileId = saved.id;
+          } catch (e) {
+            driveError = e instanceof Error ? e.message : String(e);
+          }
         } else {
           // Base64 CSV: transparently decode the byte stream before scrubbing.
           const src = isB64
             ? file.stream().pipeThrough(base64DecodeStream())
             : file.stream();
-          result = await scrubContactsStreaming(c.env, org, src, {
-            phoneCol,
-            keepColumns,
-            evState,
-            onProgress: progress,
-          });
+          // STREAMING PATH: scrub output flows row-by-row into a resumable Drive
+          // upload so the full cleaned CSV is never buffered in memory. This is
+          // the large-file OOM fix. scrub + upload run concurrently.
+          progress(`Saving to ${destMap[dest]} Google Drive (streaming)...`);
+          const ts = new TransformStream<Uint8Array, Uint8Array>();
+          const writer = ts.writable.getWriter();
+          const enc = new TextEncoder();
+          let firstLine = true;
+          const sink = async (line: string) => {
+            // Re-join with '\n'; prepend newline before every line after the first.
+            await writer.write(enc.encode(firstLine ? line : '\n' + line));
+            firstLine = false;
+          };
+          // Kick off the Drive upload (consumes the readable side) concurrently.
+          const uploadPromise = driveUploadCsvStream(c.env, folderId, fileName, ts.readable)
+            .then((saved) => { driveOk = true; driveFileName = saved.name; driveFileId = saved.id; })
+            .catch((e) => { driveError = e instanceof Error ? e.message : String(e); });
+          try {
+            result = await scrubContactsStreaming(c.env, org, src, {
+              phoneCol, keepColumns, evState, onProgress: progress, sink,
+            });
+            await writer.close();
+          } catch (e) {
+            // Abort the upload side so it doesn't hang on a half-written stream.
+            try { await writer.abort(e); } catch { /* ignore */ }
+            throw e;
+          }
+          await uploadPromise;
         }
-        console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'scrub-returned', cleanedChars: result.cleanedCsv.length, kept: result.kept }));
-        progress(`Saving to ${destMap[dest]} Google Drive...`);
-        let driveOk = false;
-        let driveFileName: string | undefined;
-        let driveFileId: string | undefined;
-        let driveError: string | undefined;
-        try {
-          console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'before-drive-upload', bytes: result.cleanedCsv.length }));
-          const saved = await driveUploadCsv(
-            c.env,
-            driveFolderFor(c.env, dest as DriveDest),
-            fileName,
-            result.cleanedCsv,
-          );
-          console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'after-drive-upload', id: saved.id }));
-          driveOk = true;
-          driveFileName = saved.name;
-          driveFileId = saved.id;
-        } catch (e) {
-          driveError = e instanceof Error ? e.message : String(e);
-        }
-        console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'before-send-done', cleanedChars: result.cleanedCsv.length }));
+        console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'scrub+upload-done', kept: result.kept, driveOk, driveError }));
         progress('Finishing up...');
         send({
           done: true,
@@ -387,7 +401,11 @@ api.post('/scrub/drive', async (c) => {
           driveFileId,
           driveError,
           downloadName: fileName,
-          cleanedCsv: result.cleanedCsv,
+          // Large streamed files are NOT echoed back (that re-buffered the whole
+          // file and caused the OOM). The cleaned file lives in Drive; the team
+          // downloads it there, or via /api/scrub/download/<fileId>.
+          cleanedCsv: result.cleanedCsv || undefined,
+          streamedToDrive: !isSpreadsheet,
           inputRows: result.inputRows,
           phoneColumn: result.phoneColumn,
           phoneColumnIndex: result.phoneColumnIndex,
@@ -410,6 +428,27 @@ api.post('/scrub/drive', async (c) => {
   return new Response(stream, {
     headers: { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-store' },
   });
+});
+
+// Stream a scrubbed file back from Drive (for large files that were streamed to
+// Drive and not echoed inline). Read-only: pipes Drive's response body straight
+// through, so the Worker never buffers the whole file. Auth-gated like the rest.
+api.get('/scrub/download/:fileId', async (c) => {
+  const fileId = c.req.param('fileId');
+  const name = (c.req.query('name') || 'scrubbed.csv').replace(/["\r\n]/g, '');
+  if (!fileId) return c.json({ error: 'missing fileId' }, 400);
+  try {
+    const res = await driveDownloadStream(c.env, fileId);
+    return new Response(res.body, {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="${name}"`,
+        'Cache-Control': 'no-store',
+      },
+    });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
 });
 
 // Exact record count for one file (read-only). Guards very large files.

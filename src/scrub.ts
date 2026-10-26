@@ -240,6 +240,15 @@ export interface StreamScrubOptions {
    * remove them from the list AFTER the opt-out scrub, matching on cell phone.
    */
   evState?: string | null;
+  /**
+   * Optional streaming output sink. When provided, each kept output line is
+   * written here (with trailing newline) AS IT IS PRODUCED, and the full
+   * cleaned CSV is NOT buffered in memory. This keeps Worker memory flat
+   * regardless of file size (fixes the large-file OOM). `result.cleanedCsv`
+   * is returned empty in this mode. When omitted, behavior is unchanged
+   * (output buffered + returned in `cleanedCsv`).
+   */
+  sink?: (line: string) => void | Promise<void>;
 }
 
 /** Early-vote scrub stats, attached to the scrub result when the EV scrub ran. */
@@ -319,8 +328,18 @@ export async function scrubContactsStreaming(
 
   cp('ev-phase-done', { evRan: ev.ran, evUniverse: ev.universeSize });
 
-  const outParts: string[] = [];
+  const sink = opts.sink;
+  const streaming = typeof sink === 'function';
+  const outParts: string[] = []; // used only in buffered (non-sink) mode
+  let keptCount = 0; // rows written to output (streaming-safe counter)
   let outChars = 0; // running total of output string length (memory proxy)
+  // Emit one output line: stream it to the sink, or buffer it.
+  const writeOut = async (l: string) => {
+    keptCount++;
+    outChars += l.length + 1;
+    if (streaming) await sink!(l);
+    else outParts.push(l);
+  };
   let headerCols: string[] = [];
   let phoneIdx = -1;
   let headerSeen = false;
@@ -358,11 +377,11 @@ export async function scrubContactsStreaming(
         // Safety: always keep the phone column so downstream detection works.
         if (!keepIdx.includes(phoneIdx)) keepIdx.push(phoneIdx);
         keptColumns = keepIdx.map((i) => headerCols[i]);
-        outParts.push(keepIdx.map((i) => csvField(headerCols[i] ?? '')).join(','));
+        await writeOut(keepIdx.map((i) => csvField(headerCols[i] ?? '')).join(','));
         await emit(`Trimming to ${keepIdx.length} column${keepIdx.length === 1 ? '' : 's'}, scrubbing rows...`);
       } else {
         keptColumns = headerCols;
-        outParts.push(line);
+        await writeOut(line);
       }
       continue;
     }
@@ -371,22 +390,22 @@ export async function scrubContactsStreaming(
     const cols = splitCsvLine(line);
     const p = normalizePhone(cols[phoneIdx] ?? '');
     const outLine = keepIdx === null ? line : projectLine(cols);
-    if (!p) { unparseable++; outParts.push(outLine); outChars += outLine.length + 1; }
+    if (!p) { unparseable++; await writeOut(outLine); }
     else if (optOuts.has(p)) { scrubbed++; }              // opt-out removed first
     else if (evPhones && evPhones.has(p)) { ev.removed++; } // then already-voted
-    else { outParts.push(outLine); outChars += outLine.length + 1; }
-    // Row-loop heartbeat: if the Worker dies mid-loop, the last heartbeat shows
-    // how far it got and how big the output buffer had grown.
+    else { await writeOut(outLine); }
+    // Row-loop heartbeat: in streaming mode memory stays flat (outChars is just
+    // a cumulative counter, not held data).
     if (inputRows % 100000 === 0) {
-      cp('rows', { inputRows, kept: outParts.length, scrubbed, evRemoved: ev.removed, outChars });
+      cp('rows', { inputRows, kept: keptCount, scrubbed, evRemoved: ev.removed, outChars, streaming });
     }
   }
-  cp('rows-done', { inputRows, kept: outParts.length, scrubbed, evRemoved: ev.removed, outChars });
+  cp('rows-done', { inputRows, kept: keptCount, scrubbed, evRemoved: ev.removed, outChars, streaming });
 
   await emit('Building cleaned file...');
-  cp('before-join', { parts: outParts.length, outChars });
-  const cleanedCsv = outParts.join('\n');
-  cp('after-join', { cleanedChars: cleanedCsv.length });
+  // In streaming mode the output already went to the sink; return empty here.
+  const cleanedCsv = streaming ? '' : outParts.join('\n');
+  cp('after-join', { cleanedChars: cleanedCsv.length, streaming });
   return {
     org,
     inputRows,

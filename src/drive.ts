@@ -107,6 +107,21 @@ export async function driveDownloadText(env: Env, fileId: string): Promise<strin
   return res.text();
 }
 
+/** Open a streaming download of a Drive file (alt=media). Returns the raw
+ * fetch Response so the caller can pipe `.body` straight to the client without
+ * buffering the whole file in the Worker. Read-only. */
+export async function driveDownloadStream(env: Env, fileId: string): Promise<Response> {
+  const token = await getAccessToken(env);
+  const url =
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}` +
+    `?alt=media&supportsAllDrives=true`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok || !res.body) {
+    throw new Error(`Drive download error: ${res.status} ${res.ok ? '(no body)' : await res.text()}`);
+  }
+  return res;
+}
+
 /** The native Google mime type for Sheets (files that were opened/edited in
  * Google and converted away from plain CSV). These cannot be fetched with
  * alt=media; they must be EXPORTED. */
@@ -170,4 +185,52 @@ export async function driveUploadCsv(
   );
   if (!res.ok) throw new Error(`Drive upload error: ${res.status} ${await res.text()}`);
   return (await res.json()) as { id: string; name: string };
+}
+
+/**
+ * Upload CSV content into a folder by STREAMING the body, so the full file is
+ * never materialized as a single string in the Worker. Uses Drive's resumable
+ * upload protocol: (1) POST to open a session and get an upload URL, then
+ * (2) PUT the body as a ReadableStream to that URL. Memory stays flat regardless
+ * of file size (fixes the large-file OOM). Returns the created file id/name.
+ *
+ * Note: the caller supplies `body` as a ReadableStream<Uint8Array>. For chunked
+ * (unknown-length) transfer we omit Content-Length; Drive accepts a single
+ * streamed PUT that finalizes the file.
+ */
+export async function driveUploadCsvStream(
+  env: Env,
+  folderId: string,
+  name: string,
+  body: ReadableStream<Uint8Array>,
+): Promise<{ id: string; name: string }> {
+  const token = await getAccessToken(env);
+  const metadata = { name, parents: [folderId], mimeType: 'text/csv' };
+  // Step 1: open a resumable session.
+  const init = await fetch(
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name&supportsAllDrives=true',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+        'X-Upload-Content-Type': 'text/csv',
+      },
+      body: JSON.stringify(metadata),
+    },
+  );
+  if (!init.ok) throw new Error(`Drive resumable init error: ${init.status} ${await init.text()}`);
+  const uploadUrl = init.headers.get('location');
+  if (!uploadUrl) throw new Error('Drive resumable init: missing upload URL (Location header)');
+  // Step 2: stream the body to the session URL in a single PUT.
+  const put = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/csv' },
+    body,
+    // Cloudflare requires this hint for streaming request bodies.
+    // @ts-expect-error - duplex is valid in the Workers runtime fetch.
+    duplex: 'half',
+  });
+  if (!put.ok) throw new Error(`Drive resumable upload error: ${put.status} ${await put.text()}`);
+  return (await put.json()) as { id: string; name: string };
 }

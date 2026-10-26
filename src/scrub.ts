@@ -471,3 +471,180 @@ export async function scrubContacts(
     cleanedCsv: outLines.join('\n'),
   };
 }
+
+/**
+ * LOW-MEMORY streaming scrub (fixes the large-file OOM at its real root).
+ *
+ * The naive approach loads the entire opt-out universe (millions of phones) into
+ * one Set -> ~200MB -> exceeds the 128MB Worker limit before the file is even
+ * read. Instead we FLIP it:
+ *
+ *   Pass 1: stream the uploaded file -> Set of THIS list's unique phones.
+ *           Then stream the opt-out delta files ONE AT A TIME; for each opt-out
+ *           phone that is also in the list, record it in a small `toRemove` set
+ *           (the OVERLAP only - typically tiny). Drop the list-phone set.
+ *   Pass 2: stream the uploaded file again -> write every row whose phone is NOT
+ *           in `toRemove` to the output sink (streamed straight to Drive).
+ *
+ * Peak memory scales with the SMALLER of {this list, opt-out universe}; the list
+ * is smaller, so it fits where the all-opt-outs Set did not. Result is EXACT
+ * (no bloom-filter false positives).
+ *
+ * `makeInput` must return a FRESH stream of the (already base64-decoded) CSV
+ * bytes each call, because we read the input twice.
+ */
+export interface LowMemScrubOptions {
+  phoneCol?: number;
+  keepColumns?: string[];
+  onProgress?: (msg: string) => void | Promise<void>;
+  evState?: string | null;
+  /** Output sink: receives each kept line (caller adds newlines via the writer). */
+  sink: (line: string) => void | Promise<void>;
+}
+
+export async function scrubContactsLowMem(
+  env: Env,
+  org: string,
+  makeInput: () => ReadableStream<Uint8Array>,
+  opts: LowMemScrubOptions,
+): Promise<ScrubResult & { keptColumns: string[]; droppedColumns: number; earlyVote?: EarlyVoteScrub }> {
+  const emit = async (m: string) => { if (opts.onProgress) await opts.onProgress(m); };
+  const t0 = Date.now();
+  const cp = (phase: string, extra: Record<string, unknown> = {}) => {
+    try { console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase, ms: Date.now() - t0, ...extra })); } catch { /* ignore */ }
+  };
+  cp('lowmem-start', { org, hasEv: !!opts.evState });
+
+  // --- Resolve header / phone column / keep columns from the first line. We do a
+  // tiny peek by reading pass-1 which also collects list phones. ---
+  const phoneColOverride = opts.phoneCol;
+  const wantKeep = (opts.keepColumns || []).map((c) => c.trim().toLowerCase()).filter(Boolean);
+
+  let headerCols: string[] = [];
+  let phoneIdx = -1;
+  let keepIdx: number[] | null = null;
+  let keptColumns: string[] = [];
+
+  const resolveHeader = (line: string) => {
+    headerCols = splitCsvLine(line);
+    phoneIdx =
+      typeof phoneColOverride === 'number' && phoneColOverride >= 0 && phoneColOverride < headerCols.length
+        ? phoneColOverride
+        : findPhoneColumn(headerCols);
+    if (phoneIdx < 0) phoneIdx = 0;
+    if (wantKeep.length > 0) {
+      const lower = headerCols.map((h) => h.trim().toLowerCase());
+      const idx: number[] = [];
+      for (const name of wantKeep) {
+        const i = lower.indexOf(name);
+        if (i >= 0) idx.push(i);
+      }
+      if (!idx.includes(phoneIdx)) idx.push(phoneIdx);
+      keepIdx = idx;
+      keptColumns = idx.map((i) => headerCols[i]);
+    } else {
+      keptColumns = headerCols;
+    }
+  };
+
+  // ---------- PASS 1a: collect this list's unique phones ----------
+  await emit('Reading your list...');
+  let listPhones: Set<string> | null = new Set<string>();
+  let headerSeen = false;
+  let inputRows = 0;
+  let unparseable = 0;
+  for await (const line of streamLines(makeInput())) {
+    if (!headerSeen) { headerSeen = true; resolveHeader(line); continue; }
+    if (!line.trim()) continue;
+    inputRows++;
+    const p = normalizePhone(splitCsvLine(line)[phoneIdx] ?? '');
+    if (!p) { unparseable++; continue; }
+    listPhones.add(p);
+  }
+  cp('list-phones', { inputRows, uniqueListPhones: listPhones.size, unparseable });
+
+  // ---------- PASS 1b: stream opt-outs; keep only the overlap ----------
+  await emit('Checking opt-outs...');
+  const toRemove = new Set<string>();
+  let optOutSeen = 0;
+  await streamSourceOptOutPhones(
+    env,
+    org,
+    (phone) => { if (listPhones!.has(phone)) toRemove.add(phone); },
+    async (seen) => { optOutSeen = seen; await emit(`Checking opt-outs... (${seen.toLocaleString()} scanned)`); },
+  );
+  cp('overlap', { optOutScanned: optOutSeen, overlap: toRemove.size });
+
+  // ---------- EV scrub set (optional), scoped to the list like opt-outs ----------
+  const ev: EarlyVoteScrub = {
+    ran: false, state: opts.evState || '', universeSize: 0, removed: 0,
+    block: '', castStatuses: [], unmappedStatuses: [], dataAsOf: '', stale: false,
+  };
+  const evRemove = new Set<string>();
+  if (opts.evState) {
+    try {
+      const cached = await readCachedState(env, opts.evState);
+      if (!cached) {
+        ev.error = `No early-vote data cached for ${opts.evState} yet (the daily L2 pull has not run for this state).`;
+      } else {
+        ev.ran = true;
+        ev.universeSize = cached.phones.size;
+        ev.block = cached.meta.block;
+        ev.castStatuses = cached.meta.castStatuses;
+        ev.unmappedStatuses = cached.meta.unmappedStatuses;
+        ev.dataAsOf = cached.meta.pulledAt;
+        ev.stale = cached.stale;
+        for (const ph of cached.phones) { if (listPhones!.has(ph) && !toRemove.has(ph)) evRemove.add(ph); }
+      }
+    } catch (e) {
+      ev.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+  cp('ev-overlap', { evRan: ev.ran, evOverlap: evRemove.size });
+
+  // Free the big list-phone set before the output pass.
+  listPhones = null;
+
+  // ---------- PASS 2: stream the file again, write survivors ----------
+  await emit('Writing cleaned list...');
+  const ki = keepIdx as number[] | null;
+  const projectLine = (cols: string[]): string =>
+    ki === null ? '' : ki.map((i: number) => csvField(cols[i] ?? '')).join(',');
+  let scrubbed = 0;
+  let keptCount = 0;
+  let firstOut = true;
+  let seenHeader2 = false;
+  for await (const line of streamLines(makeInput())) {
+    if (!seenHeader2) {
+      seenHeader2 = true;
+      const outHeader = ki === null ? line : ki.map((i: number) => csvField(headerCols[i] ?? '')).join(',');
+      await opts.sink(firstOut ? outHeader : '\n' + outHeader); firstOut = false;
+      continue;
+    }
+    if (!line.trim()) continue;
+    const cols = splitCsvLine(line);
+    const p = normalizePhone(cols[phoneIdx] ?? '');
+    const outLine = ki === null ? line : projectLine(cols);
+    if (p && (toRemove.has(p))) { scrubbed++; continue; }
+    if (p && evRemove.has(p)) { ev.removed++; continue; }
+    await opts.sink(firstOut ? outLine : '\n' + outLine); firstOut = false;
+    keptCount++;
+  }
+  cp('lowmem-done', { inputRows, scrubbed, evRemoved: ev.removed, kept: keptCount });
+
+  return {
+    org,
+    inputRows,
+    phoneColumn: headerCols[phoneIdx] ?? `col ${phoneIdx}`,
+    phoneColumnIndex: phoneIdx,
+    autoDetected: typeof phoneColOverride !== 'number',
+    optOutSetSize: optOutSeen,
+    scrubbed,
+    kept: inputRows - scrubbed - ev.removed,
+    unparseablePhones: unparseable,
+    cleanedCsv: '',
+    keptColumns,
+    droppedColumns: Math.max(0, headerCols.length - keptColumns.length),
+    earlyVote: opts.evState ? ev : undefined,
+  };
+}

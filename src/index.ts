@@ -3,7 +3,7 @@ import type { Env, SessionUser } from './types';
 import { authRoutes, requireAuth } from './auth';
 import { listAccounts, listAccountsForRole, filesForOrg, listFilesForRole } from './accounts';
 import type { SyncRole } from './s3';
-import { scrubContacts, scrubContactsStreaming, buildOptOutSet, normalizeOptOutCsv } from './scrub';
+import { scrubContacts, scrubContactsLowMem, buildOptOutSet, normalizeOptOutCsv } from './scrub';
 import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv, base64DecodeStream } from './parsefile';
 import { driveList, driveUploadCsv, driveUploadCsvStream, driveDownloadStream, driveFolderFor, type DriveDest } from './drive';
@@ -355,29 +355,26 @@ api.post('/scrub/drive', async (c) => {
             driveError = e instanceof Error ? e.message : String(e);
           }
         } else {
-          // Base64 CSV: transparently decode the byte stream before scrubbing.
-          const src = isB64
-            ? file.stream().pipeThrough(base64DecodeStream())
-            : file.stream();
-          // STREAMING PATH: scrub output flows row-by-row into a resumable Drive
-          // upload so the full cleaned CSV is never buffered in memory. This is
-          // the large-file OOM fix. scrub + upload run concurrently.
+          // LOW-MEMORY STREAMING PATH (fixes the large-file OOM at its root).
+          // We never load the full opt-out universe into memory. Instead we hold
+          // this list's phones, stream opt-outs past them, and keep only the
+          // overlap - then stream survivors straight into a resumable Drive
+          // upload. Reads the uploaded file TWICE, so makeInput() returns a fresh
+          // decoded stream each call (File from formData is buffer-backed, so
+          // file.stream() can be re-invoked).
+          const makeInput = (): ReadableStream<Uint8Array> =>
+            isB64 ? file.stream().pipeThrough(base64DecodeStream()) : file.stream();
           progress(`Saving to ${destMap[dest]} Google Drive (streaming)...`);
           const ts = new TransformStream<Uint8Array, Uint8Array>();
           const writer = ts.writable.getWriter();
           const enc = new TextEncoder();
-          let firstLine = true;
-          const sink = async (line: string) => {
-            // Re-join with '\n'; prepend newline before every line after the first.
-            await writer.write(enc.encode(firstLine ? line : '\n' + line));
-            firstLine = false;
-          };
+          const sink = async (chunk: string) => { await writer.write(enc.encode(chunk)); };
           // Kick off the Drive upload (consumes the readable side) concurrently.
           const uploadPromise = driveUploadCsvStream(c.env, folderId, fileName, ts.readable)
             .then((saved) => { driveOk = true; driveFileName = saved.name; driveFileId = saved.id; })
             .catch((e) => { driveError = e instanceof Error ? e.message : String(e); });
           try {
-            result = await scrubContactsStreaming(c.env, org, src, {
+            result = await scrubContactsLowMem(c.env, org, makeInput, {
               phoneCol, keepColumns, evState, onProgress: progress, sink,
             });
             await writer.close();

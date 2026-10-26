@@ -265,9 +265,21 @@ export async function scrubContactsStreaming(
   const phoneColOverride = opts.phoneCol;
   const emit = async (m: string) => { if (opts.onProgress) await opts.onProgress(m); };
 
+  // --- DIAGNOSTIC checkpoint logging (staging only; see wrangler tail) ---
+  // Workers have no process.memoryUsage(); we log phase + elapsed + rows +
+  // running output character count as a memory-growth proxy. The LAST line we
+  // see before the stream dies tells us exactly which phase blows up.
+  const t0 = Date.now();
+  const cp = (phase: string, extra: Record<string, unknown> = {}) => {
+    const rec = { tag: 'SCRUBDIAG', phase, ms: Date.now() - t0, ...extra };
+    try { console.log(JSON.stringify(rec)); } catch { /* ignore */ }
+  };
+  cp('start', { org, hasEv: !!opts.evState, keep: (opts.keepColumns || []).length });
+
   await emit('Reading opt-out list...');
   let fileCount = 0;
   const optOuts = await buildOptOutSetStreaming(env, org, (n) => { fileCount = n; });
+  cp('optout-set-built', { optOutSize: optOuts.size, files: fileCount });
   await emit(
     `Scrubbing against ${optOuts.size.toLocaleString()} opt-outs (${fileCount} source file${fileCount === 1 ? '' : 's'})...`,
   );
@@ -305,7 +317,10 @@ export async function scrubContactsStreaming(
     }
   }
 
+  cp('ev-phase-done', { evRan: ev.ran, evUniverse: ev.universeSize });
+
   const outParts: string[] = [];
+  let outChars = 0; // running total of output string length (memory proxy)
   let headerCols: string[] = [];
   let phoneIdx = -1;
   let headerSeen = false;
@@ -356,13 +371,22 @@ export async function scrubContactsStreaming(
     const cols = splitCsvLine(line);
     const p = normalizePhone(cols[phoneIdx] ?? '');
     const outLine = keepIdx === null ? line : projectLine(cols);
-    if (!p) { unparseable++; outParts.push(outLine); continue; }
-    if (optOuts.has(p)) { scrubbed++; continue; }        // opt-out removed first
-    if (evPhones && evPhones.has(p)) { ev.removed++; continue; } // then already-voted
-    outParts.push(outLine);
+    if (!p) { unparseable++; outParts.push(outLine); outChars += outLine.length + 1; }
+    else if (optOuts.has(p)) { scrubbed++; }              // opt-out removed first
+    else if (evPhones && evPhones.has(p)) { ev.removed++; } // then already-voted
+    else { outParts.push(outLine); outChars += outLine.length + 1; }
+    // Row-loop heartbeat: if the Worker dies mid-loop, the last heartbeat shows
+    // how far it got and how big the output buffer had grown.
+    if (inputRows % 100000 === 0) {
+      cp('rows', { inputRows, kept: outParts.length, scrubbed, evRemoved: ev.removed, outChars });
+    }
   }
+  cp('rows-done', { inputRows, kept: outParts.length, scrubbed, evRemoved: ev.removed, outChars });
 
   await emit('Building cleaned file...');
+  cp('before-join', { parts: outParts.length, outChars });
+  const cleanedCsv = outParts.join('\n');
+  cp('after-join', { cleanedChars: cleanedCsv.length });
   return {
     org,
     inputRows,
@@ -373,7 +397,7 @@ export async function scrubContactsStreaming(
     scrubbed,
     kept: inputRows - scrubbed - ev.removed,
     unparseablePhones: unparseable,
-    cleanedCsv: outParts.join('\n'),
+    cleanedCsv,
     keptColumns,
     droppedColumns: Math.max(0, headerCols.length - keptColumns.length),
     earlyVote: opts.evState ? ev : undefined,

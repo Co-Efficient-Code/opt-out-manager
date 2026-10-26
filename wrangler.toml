@@ -30,6 +30,13 @@ routes = [
 [env.staging.limits]
 cpu_ms = 300000
 
+# DIAGNOSTIC: capture Worker logs (incl. SCRUBDIAG checkpoints + crash reason)
+# persistently so we can inspect a failed large-file scrub after the fact.
+# Staging-only while we diagnose the large-file OOM.
+[env.staging.observability]
+enabled = true
+head_sampling_rate = 1
+
 [[env.staging.kv_namespaces]]
 binding = "OPTOUT_MAPPING"
 id = "c5678d4a97bd41f9b15feedabe68926c"

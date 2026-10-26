@@ -353,24 +353,28 @@ api.post('/scrub/drive', async (c) => {
             onProgress: progress,
           });
         }
+        console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'scrub-returned', cleanedChars: result.cleanedCsv.length, kept: result.kept }));
         progress(`Saving to ${destMap[dest]} Google Drive...`);
         let driveOk = false;
         let driveFileName: string | undefined;
         let driveFileId: string | undefined;
         let driveError: string | undefined;
         try {
+          console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'before-drive-upload', bytes: result.cleanedCsv.length }));
           const saved = await driveUploadCsv(
             c.env,
             driveFolderFor(c.env, dest as DriveDest),
             fileName,
             result.cleanedCsv,
           );
+          console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'after-drive-upload', id: saved.id }));
           driveOk = true;
           driveFileName = saved.name;
           driveFileId = saved.id;
         } catch (e) {
           driveError = e instanceof Error ? e.message : String(e);
         }
+        console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'before-send-done', cleanedChars: result.cleanedCsv.length }));
         progress('Finishing up...');
         send({
           done: true,

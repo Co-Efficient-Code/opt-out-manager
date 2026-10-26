@@ -3,10 +3,10 @@ import type { Env, SessionUser } from './types';
 import { authRoutes, requireAuth } from './auth';
 import { listAccounts, listAccountsForRole, filesForOrg, listFilesForRole } from './accounts';
 import type { SyncRole } from './s3';
-import { scrubContacts, scrubContactsLowMem, buildOptOutSet, normalizeOptOutCsv } from './scrub';
+import { scrubContacts, scrubContactsLowMem, buildOptOutSet, normalizeOptOutCsv, type ScrubResult } from './scrub';
 import { putObjectNoOverwrite, getObject } from './s3';
 import { fileToCsv, base64DecodeStream } from './parsefile';
-import { driveList, driveUploadCsv, driveUploadCsvStream, driveDownloadStream, driveFolderFor, type DriveDest } from './drive';
+import { driveList, driveUploadCsv, driveResumableInit, driveResumablePut, driveDownloadStream, driveFolderFor, type DriveDest } from './drive';
 
 import { loadOverrides, setOverride, cleanName, PAC_SLUGS, DESTINATIONS, type OverrideMap } from './mapping';
 import { loadRunHistory, loadLastRunLog } from './runhistory';
@@ -364,26 +364,64 @@ api.post('/scrub/drive', async (c) => {
           // file.stream() can be re-invoked).
           const makeInput = (): ReadableStream<Uint8Array> =>
             isB64 ? file.stream().pipeThrough(base64DecodeStream()) : file.stream();
+          // Open the Drive resumable session FIRST (fail fast on auth/init before
+          // we generate the large body).
           progress(`Saving to ${destMap[dest]} Google Drive (streaming)...`);
-          const ts = new TransformStream<Uint8Array, Uint8Array>();
-          const writer = ts.writable.getWriter();
+          const uploadUrl = await driveResumableInit(c.env, folderId, fileName);
+          // Build a pull-based ReadableStream whose body IS the scrub output. The
+          // scrub runs inside start(), enqueuing each chunk; the Drive PUT fetch
+          // consumes it with backpressure. No separate writer/reader race.
           const enc = new TextEncoder();
-          const sink = async (chunk: string) => { await writer.write(enc.encode(chunk)); };
-          // Kick off the Drive upload (consumes the readable side) concurrently.
-          const uploadPromise = driveUploadCsvStream(c.env, folderId, fileName, ts.readable)
-            .then((saved) => { driveOk = true; driveFileName = saved.name; driveFileId = saved.id; })
-            .catch((e) => { driveError = e instanceof Error ? e.message : String(e); });
+          let scrubResult: (ScrubResult & { keptColumns: string[]; droppedColumns: number; earlyVote?: unknown }) | null = null;
+          let scrubErr: unknown = null;
+          const bodyStream = new ReadableStream<Uint8Array>(
+            {
+              async start(controller) {
+                // Coalesce many small lines into ~64KB blocks before enqueuing
+                // (fewer chunks = less overhead), and respect backpressure so the
+                // stream queue never balloons: if the consumer is behind
+                // (desiredSize <= 0) yield until it drains. Keeps memory flat.
+                let buf = '';
+                const FLUSH = 64 * 1024;
+                const flush = async () => {
+                  if (!buf) return;
+                  controller.enqueue(enc.encode(buf));
+                  buf = '';
+                  // backpressure: give the fetch a chance to drain the queue
+                  while ((controller.desiredSize ?? 1) <= 0) {
+                    await new Promise((r) => setTimeout(r, 0));
+                  }
+                };
+                const sink = async (chunk: string) => {
+                  buf += chunk;
+                  if (buf.length >= FLUSH) await flush();
+                };
+                try {
+                  scrubResult = await scrubContactsLowMem(c.env, org, makeInput, {
+                    phoneCol, keepColumns, evState, onProgress: progress, sink,
+                  });
+                  await flush();
+                  controller.close();
+                } catch (e) {
+                  scrubErr = e;
+                  controller.error(e);
+                }
+              },
+            },
+            new CountQueuingStrategy({ highWaterMark: 8 }),
+          );
           try {
-            result = await scrubContactsLowMem(c.env, org, makeInput, {
-              phoneCol, keepColumns, evState, onProgress: progress, sink,
-            });
-            await writer.close();
+            const saved = await driveResumablePut(uploadUrl, bodyStream);
+            driveOk = true; driveFileName = saved.name; driveFileId = saved.id;
           } catch (e) {
-            // Abort the upload side so it doesn't hang on a half-written stream.
-            try { await writer.abort(e); } catch { /* ignore */ }
-            throw e;
+            // If the scrub itself threw, surface THAT (the useful error); else the
+            // Drive/transport error.
+            if (scrubErr) throw scrubErr;
+            driveError = e instanceof Error ? e.message : String(e);
           }
-          await uploadPromise;
+          if (scrubErr) throw scrubErr;
+          if (!scrubResult) throw new Error('scrub produced no result');
+          result = scrubResult;
         }
         console.log(JSON.stringify({ tag: 'SCRUBDIAG', phase: 'scrub+upload-done', kept: result.kept, driveOk, driveError }));
         progress('Finishing up...');

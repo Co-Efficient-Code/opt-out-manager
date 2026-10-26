@@ -204,9 +204,23 @@ export async function driveUploadCsvStream(
   name: string,
   body: ReadableStream<Uint8Array>,
 ): Promise<{ id: string; name: string }> {
+  const uploadUrl = await driveResumableInit(env, folderId, name);
+  return driveResumablePut(uploadUrl, body);
+}
+
+/**
+ * Open a Drive resumable upload session and return the session URL. Doing this
+ * as a SEPARATE step (before any body is produced) lets the caller fail fast on
+ * auth/init errors and only then start generating the (large) body, avoiding a
+ * race where a not-yet-consumed stream errors out.
+ */
+export async function driveResumableInit(
+  env: Env,
+  folderId: string,
+  name: string,
+): Promise<string> {
   const token = await getAccessToken(env);
   const metadata = { name, parents: [folderId], mimeType: 'text/csv' };
-  // Step 1: open a resumable session.
   const init = await fetch(
     'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name&supportsAllDrives=true',
     {
@@ -222,7 +236,14 @@ export async function driveUploadCsvStream(
   if (!init.ok) throw new Error(`Drive resumable init error: ${init.status} ${await init.text()}`);
   const uploadUrl = init.headers.get('location');
   if (!uploadUrl) throw new Error('Drive resumable init: missing upload URL (Location header)');
-  // Step 2: stream the body to the session URL in a single PUT.
+  return uploadUrl;
+}
+
+/** PUT a streamed body to an already-open resumable session URL. */
+export async function driveResumablePut(
+  uploadUrl: string,
+  body: ReadableStream<Uint8Array>,
+): Promise<{ id: string; name: string }> {
   const put = await fetch(uploadUrl, {
     method: 'PUT',
     headers: { 'Content-Type': 'text/csv' },

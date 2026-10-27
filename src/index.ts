@@ -113,6 +113,15 @@ app.post('/cron/ev-refresh', async (c) => {
   }
 });
 
+// List the configured EV states (token-guarded). Lets the refresh workflow loop
+// one state per request without hardcoding the list in two places.
+app.get('/cron/ev-states', async (c) => {
+  const secret = c.env.CRON_SECRET;
+  const provided = (c.req.header('Authorization') || '').replace(/^Bearer\s+/i, '');
+  if (!secret || provided !== secret) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  return c.json({ ok: true, states: evStates(c.env) });
+});
+
 // DIAGNOSTIC: make ONE L2 call from the Worker (not a laptop) to confirm the
 // Worker's egress can reach L2 with the key. Token-guarded. Read-only, 1 call.
 app.post('/cron/ev-test', async (c) => {

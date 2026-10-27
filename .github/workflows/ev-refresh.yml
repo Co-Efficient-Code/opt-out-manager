@@ -46,14 +46,41 @@ jobs:
           if [ -z "${URL:-}" ] || [ -z "${SECRET:-}" ]; then
             echo "Missing URL or CRON secret for target=$TARGET"; exit 1
           fi
-          echo "Triggering early-vote refresh ($TARGET) at $(date -u) ..."
-          # Pulling ~13 states through L2's >=7s gate + exports takes a while;
-          # allow a generous timeout.
-          HTTP=$(curl -sS -m 1500 -o /tmp/resp.json -w '%{http_code}' \
-            -X POST "$URL/cron/ev-refresh" \
-            -H "Authorization: Bearer $SECRET")
-          echo "HTTP $HTTP"
-          cat /tmp/resp.json
-          echo
-          # Fail the job if the endpoint returned non-2xx.
-          [ "$HTTP" -ge 200 ] && [ "$HTTP" -lt 300 ]
+          echo "Early-vote refresh ($TARGET) at $(date -u) ..."
+          # Pull ONE STATE PER REQUEST in a loop. Each state is a small, bounded
+          # request (well under any Worker/request timeout); a single state
+          # failing does NOT abort the rest. Much more robust than one big
+          # all-states call that can time out partway and leave gaps.
+
+          # Get the configured state list from the Worker (stays in sync with
+          # EV_STATES config; no hardcoding here).
+          STATES_JSON=$(curl -sS -m 30 "$URL/cron/ev-states" -H "Authorization: Bearer $SECRET")
+          STATES=$(printf '%s' "$STATES_JSON" | python3 -c 'import sys,json; print(" ".join(json.load(sys.stdin).get("states",[])))')
+          if [ -z "${STATES:-}" ]; then
+            echo "Could not get state list: $STATES_JSON"; exit 1
+          fi
+          echo "States: $STATES"
+
+          FAILED=""
+          for ST in $STATES; do
+            echo "--- $ST ---"
+            # Per-state timeout: block discovery + export poll. 10 min is plenty.
+            HTTP=$(curl -sS -m 600 -o /tmp/resp.json -w '%{http_code}' \
+              -X POST "$URL/cron/ev-refresh?states=$ST" \
+              -H "Authorization: Bearer $SECRET" || echo 000)
+            echo "  HTTP $HTTP"
+            cat /tmp/resp.json 2>/dev/null; echo
+            # Count it as failed if non-2xx OR the body reports a failed state.
+            if [ "$HTTP" -lt 200 ] || [ "$HTTP" -ge 300 ]; then
+              FAILED="$FAILED $ST(http=$HTTP)"
+            elif printf '%s' "$(cat /tmp/resp.json)" | grep -q '"failed":\[{'; then
+              FAILED="$FAILED $ST(reported)"
+            fi
+          done
+
+          echo "============================="
+          if [ -n "$FAILED" ]; then
+            echo "FAILED states:$FAILED"
+            exit 1
+          fi
+          echo "All states refreshed OK."

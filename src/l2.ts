@@ -296,19 +296,25 @@ export async function pullEarlyVoters(
   }
 
   // Export the cast voters' cell numbers. The export endpoint streams a CSV; we
-  // request only the phone column + the status (so we can sanity check) under
-  // the state (+ district) filter and the cast-status filter.
-  const filters: [string, string][] = [stFilter];
-  if (opts.district) filters.push(['filter.US_Congressional_District', opts.district]);
-  for (const v of castStatuses) filters.push([`filter.${gc.col}`, v]);
-
-  // Count first (cheap) so progress can show the size before the export.
+  // Count first (cheap) so progress can show the size before the export. The
+  // stats endpoint uses filter./view. query params.
+  const statFilters: [string, string][] = [stFilter];
+  if (opts.district) statFilters.push(['filter.US_Congressional_District', opts.district]);
+  for (const v of castStatuses) statFilters.push([`filter.${gc.col}`, v]);
   if (onProgress) await onProgress('Counting early voters...');
-  const cj = await stats(cfg, [...filters, [`view.${gc.col}`, '1']], gate, onProgress);
+  const cj = await stats(cfg, [...statFilters, [`view.${gc.col}`, '1']], gate, onProgress);
   const castCount = cj && cj.result === 'ok' && typeof cj.count === 'number' ? cj.count : 0;
 
+  // The records/search export takes a JSON filter object of RAW column ids (no
+  // filter. prefix). An ENUM column (the status) takes the full value list.
+  const exportFilters: Record<string, string | string[]> = {
+    Residence_Addresses_State: state,
+  };
+  if (opts.district) exportFilters.US_Congressional_District = opts.district;
+  exportFilters[gc.col] = castStatuses;
+
   if (onProgress) await onProgress(`Pulling ${castCount.toLocaleString()} early voters from L2...`);
-  const phones = await exportCastPhones(cfg, filters, gate, onProgress);
+  const phones = await exportCastPhones(cfg, exportFilters, gate, onProgress);
 
   return {
     state,
@@ -323,31 +329,61 @@ export async function pullEarlyVoters(
 }
 
 /**
- * Stream the cast voters' cell numbers from the L2 export endpoint into a Set of
- * normalized 10-digit phones. Bounded memory: only the phone set is retained.
+ * Pull the cast voters' cell numbers via L2's records/search EXPORT (a 4-step
+ * async job - confirmed live by Skye 2026-10-23, validated locally 2026-10-26):
+ *   1. submit:  POST records/search/<cust>/<app> {filters, format:'csv', wait:0, columns}
+ *               -> { job }
+ *   2. poll:    GET records/search/status/<job> every ~20s until FINISHED (ERROR aborts)
+ *   3. file:    GET records/search/file/<job> -> stream the CSV
+ * We stream the CSV and keep only the normalized cell phones (bounded memory).
+ * `filters` is a JSON object of RAW L2 column ids; an ENUM column takes a list.
  */
 async function exportCastPhones(
   cfg: L2Config,
-  filters: [string, string][],
+  filters: Record<string, string | string[]>,
   gate: { next: number },
   onProgress?: (m: string) => void | Promise<void>,
 ): Promise<Set<string>> {
   const PHONE_COL = 'VoterTelephones_CellPhoneUnformatted';
-  const qs = new URLSearchParams([
-    ['id', cfg.customer],
-    ['apikey', cfg.key],
-    [`view.${PHONE_COL}`, '1'],
-    ...filters,
-  ]);
-  const url = `${cfg.base}/customer/application/search/${cfg.customer}/${cfg.app}?${qs.toString()}`;
+  const auth = `id=${encodeURIComponent(cfg.customer)}&apikey=${encodeURIComponent(cfg.key)}`;
+  const paced = async () => {
+    const wait = gate.next - Date.now();
+    if (wait > 0) await sleep(wait);
+    gate.next = Math.max(gate.next, Date.now()) + MIN_GAP_MS;
+  };
 
-  // Pace with the shared gate (export counts against the same quota).
-  const wait = gate.next - Date.now();
-  if (wait > 0) await sleep(wait);
-  gate.next = Math.max(gate.next, Date.now()) + MIN_GAP_MS;
+  // 1. submit the export job
+  await paced();
+  const submitUrl = `${cfg.base}/records/search/${cfg.customer}/${cfg.app}?${auth}`;
+  const submitRes = await fetch(submitUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filters, format: 'csv', wait: 0, columns: ['LALVOTERID', PHONE_COL] }),
+  });
+  const submitTxt = await submitRes.text();
+  let submit: any;
+  try { submit = JSON.parse(submitTxt); } catch { throw new Error(`L2 export submit: bad response ${submitTxt.slice(0, 160)}`); }
+  const job = submit && submit.job;
+  if (!job) throw new Error(`L2 export submit: no job id (${String(submit && submit.message || submitTxt).slice(0, 160)})`);
 
-  const res = await fetch(url);
-  if (!res.ok || !res.body) throw new Error(`L2 export HTTP ${res.status}`);
+  // 2. poll until FINISHED (or ERROR). Paced; bounded to ~20 min.
+  const statusUrl = `${cfg.base}/records/search/status/${job}?${auth}`;
+  let finished = false;
+  for (let i = 0; i < 60; i++) {
+    await sleep(20000);
+    const sj = await (await fetch(statusUrl)).json().catch(() => ({} as any));
+    const s = String((sj as any).status || '').toUpperCase();
+    if (onProgress && s) await onProgress(`L2 export ${s.toLowerCase()}...`);
+    if (s === 'FINISHED') { finished = true; break; }
+    if (s === 'ERROR') throw new Error(`L2 export job error: ${JSON.stringify(sj).slice(0, 160)}`);
+  }
+  if (!finished) throw new Error('L2 export job did not finish in time');
+
+  // 3. download + stream-parse the CSV for the phone column.
+  await paced();
+  const fileUrl = `${cfg.base}/records/search/file/${job}?${auth}`;
+  const res = await fetch(fileUrl);
+  if (!res.ok || !res.body) throw new Error(`L2 export file HTTP ${res.status}`);
 
   const phones = new Set<string>();
   const reader = res.body.pipeThrough(new TextDecoderStream('utf-8')).getReader();

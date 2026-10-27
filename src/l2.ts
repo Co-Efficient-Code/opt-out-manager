@@ -190,6 +190,7 @@ export async function findGeneralColumn(
     .filter((id) => /^C_1A1P08[A-Z0-9]+_Returned_Ballot_Status$/.test(id))
     .map((id) => id.replace(/_Returned_Ballot_Status$/, ''));
   if (!blocks.length) throw new Error(`L2: no ABEV blocks on ${cfg.app}`);
+  console.log(JSON.stringify({ tag: 'EVDIAG', phase: 'blocks', state, blocks }));
 
   const window = `${WINDOW_START}|${easternTodayISO()}`;
   const stFilter: [string, string] = ['filter.Residence_Addresses_State', state];
@@ -201,6 +202,7 @@ export async function findGeneralColumn(
       const f = `${b}_${kind}_Ballot_Date`;
       if (!ids.has(f)) continue;
       const r = await stats(cfg, [stFilter, [`filter.${f}`, window]], gate, onProgress);
+      console.log(JSON.stringify({ tag: 'EVDIAG', phase: 'score', block: b, kind, result: r && r.result, count: r && r.count, message: r && String(r.message || '').slice(0, 120) }));
       if (!r || r.result !== 'ok') break; // transient; skip this block this run
       score += r.count || 0;
       if (kind === 'Returned') returned = r.count || 0;
@@ -212,11 +214,13 @@ export async function findGeneralColumn(
 
   // Take the highest-scoring block whose cast ballots are mostly dated in-window
   // (guards against a junk-dated old election winning on a few stray dates).
+  console.log(JSON.stringify({ tag: 'EVDIAG', phase: 'cands', cands: cands.map((c) => ({ block: c.block, score: c.score, returned: c.returned })) }));
   for (const c of cands) {
     const r = await stats(cfg, [stFilter, [`view.${c.col}`, '1']], gate, onProgress);
-    if (!r || r.result !== 'ok') continue;
-    const S = (r.statistics && r.statistics[c.col]) || {};
+    const S = (r && r.statistics && r.statistics[c.col]) || {};
     const cast = CAST_STATUSES.reduce((a, v) => a + (S[v] || 0), 0);
+    console.log(JSON.stringify({ tag: 'EVDIAG', phase: 'guard', block: c.block, result: r && r.result, cast, returned: c.returned, keys: Object.keys(S).slice(0, 8) }));
+    if (!r || r.result !== 'ok') continue;
     if (cast === 0 || c.returned >= MIN_DATED_SHARE * cast) return c;
   }
   return null;

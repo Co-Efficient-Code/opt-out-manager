@@ -153,3 +153,41 @@ export async function readCachedState(env: Env, state: string): Promise<EvCacheR
 function fallbackMeta(state: string, count: number): EvMeta {
   return { state, count, universeCount: count, block: '', castStatuses: [], unmappedStatuses: [], pulledAt: '' };
 }
+
+export interface EvSummaryRow {
+  state: string;
+  cached: boolean;
+  count: number;
+  block: string;
+  pulledAt: string;
+  ageHours: number | null;
+  stale: boolean;
+}
+
+/**
+ * Lightweight summary of the cache across all configured states - reads only the
+ * per-state metadata JSON (not the phone sets), for the daily notification email.
+ */
+export async function evSummary(env: Env): Promise<EvSummaryRow[]> {
+  const states = evStates(env);
+  const rows = await Promise.all(
+    states.map(async (st): Promise<EvSummaryRow> => {
+      const jsonObj = env.EV_CACHE ? await env.EV_CACHE.get(keyJson(st)) : null;
+      if (!jsonObj) return { state: st, cached: false, count: 0, block: '', pulledAt: '', ageHours: null, stale: true };
+      let meta: EvMeta;
+      try { meta = JSON.parse(await jsonObj.text()); } catch { meta = fallbackMeta(st, 0); }
+      const pulledMs = Date.parse(meta.pulledAt || '') || (jsonObj.uploaded ? jsonObj.uploaded.getTime() : 0);
+      const ageHours = pulledMs ? (Date.now() - pulledMs) / 3600000 : null;
+      return {
+        state: st,
+        cached: true,
+        count: meta.count || 0,
+        block: meta.block || '',
+        pulledAt: meta.pulledAt || '',
+        ageHours,
+        stale: ageHours === null || ageHours > STALE_HOURS,
+      };
+    }),
+  );
+  return rows;
+}

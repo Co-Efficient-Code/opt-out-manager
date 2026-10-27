@@ -11,7 +11,8 @@ import { driveList, driveUploadCsv, driveResumableInit, driveResumablePut, drive
 import { loadOverrides, setOverride, cleanName, PAC_SLUGS, DESTINATIONS, type OverrideMap } from './mapping';
 import { loadRunHistory, loadLastRunLog } from './runhistory';
 import { runOptOutSync, commitRunLog } from './runner';
-import { refreshAll, evStates } from './evcache';
+import { refreshAll, evStates, evSummary, type EvSummaryRow } from './evcache';
+import { sendEmail } from './email';
 import { l2Config } from './l2';
 import { parseUploadCsv, buildRunLog } from './runlogs';
 import { renderApp } from './ui';
@@ -89,6 +90,58 @@ app.post('/cron/run', async (c) => {
 // already-voted universe from L2 ONCE and caches it in R2, so the scrub tool
 // reads the cache instead of hitting L2 live. Token-guarded, mounted before the
 // Google-login middleware. Non-fatal per state.
+// Build the daily early-vote refresh summary email (Jacob only). One row per
+// configured state: cached count, block, freshness. Flags any missing/stale/0.
+function buildEvEmail(rows: EvSummaryRow[], isStaging: boolean): { subject: string; html: string; text: string } {
+  const total = rows.reduce((s, r) => s + (r.count || 0), 0);
+  const missing = rows.filter((r) => !r.cached).map((r) => r.state);
+  const stale = rows.filter((r) => r.cached && r.stale).map((r) => r.state);
+  const zero = rows.filter((r) => r.cached && r.count === 0).map((r) => r.state);
+  const tag = isStaging ? ' [STAGING]' : '';
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const issues: string[] = [];
+  if (missing.length) issues.push(`NOT cached: ${missing.join(', ')}`);
+  if (zero.length) issues.push(`0 early voters: ${zero.join(', ')}`);
+  if (stale.length) issues.push(`stale (>36h): ${stale.join(', ')}`);
+  const subject = `Early-Vote Cache${tag} ${dateStr} - ${rows.filter((r) => r.cached).length}/${rows.length} states, ${total.toLocaleString()} voters${issues.length ? ' (!)' : ''}`;
+
+  const fmtAge = (h: number | null) => (h === null ? '-' : h < 1 ? `${Math.round(h * 60)}m` : `${h.toFixed(1)}h`);
+  const cell = 'padding:4px 10px;border-bottom:1px solid #eee;font-size:13px;';
+  const rowHtml = rows
+    .map((r) => {
+      const warn = !r.cached || r.count === 0 || r.stale;
+      const color = warn ? 'color:#b00;font-weight:600;' : '';
+      const status = !r.cached ? 'NOT cached' : r.stale ? 'STALE' : r.count === 0 ? '0 voters' : 'ok';
+      return (
+        `<tr style="${color}">` +
+        `<td style="${cell}">${r.state}</td>` +
+        `<td style="${cell};text-align:right">${(r.count || 0).toLocaleString()}</td>` +
+        `<td style="${cell}">${r.block || '-'}</td>` +
+        `<td style="${cell}">${fmtAge(r.ageHours)}</td>` +
+        `<td style="${cell}">${status}</td>` +
+        `</tr>`
+      );
+    })
+    .join('');
+  const html =
+    `<div style="font-family:system-ui,Arial,sans-serif;color:#222">` +
+    `<h2 style="margin:0 0 4px">Early-Vote Cache${tag}</h2>` +
+    `<div style="color:#666;margin-bottom:10px">${dateStr} &middot; ${rows.filter((r) => r.cached).length}/${rows.length} states cached &middot; ${total.toLocaleString()} early voters total</div>` +
+    (issues.length ? `<div style="color:#b00;margin-bottom:10px"><b>Needs attention:</b> ${issues.join(' | ')}</div>` : `<div style="color:#157a3f;margin-bottom:10px">All states cached and fresh.</div>`) +
+    `<table style="border-collapse:collapse"><thead><tr>` +
+    ['State', 'Early voters', 'Block', 'Age', 'Status'].map((h) => `<th style="${cell};text-align:left;color:#666">${h}</th>`).join('') +
+    `</tr></thead><tbody>${rowHtml}</tbody></table>` +
+    `<div style="color:#999;font-size:12px;margin-top:12px">Automated daily pull from L2 into the scrub tool's early-vote cache. Reply to Chopper if a state looks wrong.</div>` +
+    `</div>`;
+  const text =
+    `Early-Vote Cache${tag} ${dateStr}\n` +
+    `${rows.filter((r) => r.cached).length}/${rows.length} states cached, ${total.toLocaleString()} early voters total\n` +
+    (issues.length ? `NEEDS ATTENTION: ${issues.join(' | ')}\n` : `All states cached and fresh.\n`) +
+    `\n` +
+    rows.map((r) => `${r.state}  ${(r.count || 0).toLocaleString().padStart(10)}  ${(r.block || '-').padEnd(13)}  ${fmtAge(r.ageHours).padStart(6)}  ${!r.cached ? 'NOT cached' : r.stale ? 'STALE' : r.count === 0 ? '0 voters' : 'ok'}`).join('\n');
+  return { subject, html, text };
+}
+
 app.post('/cron/ev-refresh', async (c) => {
   const secret = c.env.CRON_SECRET;
   const auth = c.req.header('Authorization') || '';
@@ -97,16 +150,50 @@ app.post('/cron/ev-refresh', async (c) => {
     return c.json({ ok: false, error: 'unauthorized' }, 401);
   }
   try {
+    // ?states=none -> notify-only: skip the L2 pull entirely, just (optionally)
+    // email the current cache summary. The workflow uses this for its final
+    // one-email-per-night call after the per-state loop (no re-pull).
+    const statesParam = (c.req.query('states') || '').trim().toLowerCase();
+    const notifyOnly = statesParam === 'none' || statesParam === 'skip';
     // Optional ?states=AZ,NY to refresh a subset (lets the cron split the ~13
     // states across a few calls if one request would run too long).
     const only = (c.req.query('states') || '')
       .split(',').map((s) => s.trim().toUpperCase()).filter((s) => /^[A-Z]{2}$/.test(s));
-    const { ok, failed } = await refreshAll(c.env, undefined, only.length ? only : undefined);
+    const { ok, failed } = notifyOnly
+      ? { ok: [], failed: [] as { state: string; error: string }[] }
+      : await refreshAll(c.env, undefined, only.length ? only : undefined);
+
+    // Optional daily notification email to Jacob ONLY. The workflow passes
+    // ?email=1 on a final summary call (after the per-state loop) so Jacob gets
+    // ONE email/night, not one per state. Reads the whole cache's current state.
+    let emailSent = false;
+    let emailError: string | undefined;
+    if (c.req.query('email') === '1') {
+      try {
+        const rows = await evSummary(c.env);
+        const isStaging = (c.env.APP_ENV || '') === 'staging';
+        const { subject, html, text } = buildEvEmail(rows, isStaging);
+        await sendEmail(c.env, {
+          fromEmail: 'chopper@coefficient.org',
+          fromName: 'Chopper (Early-Vote Refresh)' + (isStaging ? ' [STAGING]' : ''),
+          to: ['jacob@coefficient.org'],
+          subject,
+          html,
+          text,
+        });
+        emailSent = true;
+      } catch (e) {
+        emailError = e instanceof Error ? e.message : String(e);
+      }
+    }
+
     return c.json({
       ok: true,
       states: only.length ? only : evStates(c.env),
       refreshed: ok.map((m) => ({ state: m.state, count: m.count, block: m.block, pulledAt: m.pulledAt })),
       failed,
+      emailSent,
+      emailError,
     });
   } catch (e) {
     return c.json({ ok: false, error: e instanceof Error ? e.message : String(e) }, 502);

@@ -494,6 +494,12 @@ export function buildRunEmail(
   appUrl: string,
 ): { subject: string; html: string; text: string } {
   const newTotal = log.groups.reduce((s, g) => s + g.newCount, 0);
+  // Headline total = raw sum of every PAC/client bucket total. A phone that
+  // opted out under multiple PAC/destination buckets counts once PER bucket
+  // (each is a distinct opt-out relationship), so this is intentionally NOT a
+  // cross-bucket unique count. It replaces the old ReadyGOP-only totalCount,
+  // which ignored co/nnect and undercounted.
+  const grandTotal = log.groups.reduce((s, g) => s + g.todayUnique, 0);
   const quarTotal = log.quarantined.reduce((s, q) => s + q.count, 0);
   const runLogsUrl = appUrl.replace(/\/$/, '') + '/#runlogs';
   const ranLocal = new Date(log.ranAt).toLocaleString('en-US', { timeZone: 'America/Chicago' });
@@ -506,7 +512,7 @@ export function buildRunEmail(
   t.push(`Ran: ${ranLocal} CT`);
   t.push('');
   t.push(`New opt-outs uploaded: ${newTotal.toLocaleString()}`);
-  t.push(`${log.totalCount.toLocaleString()} total opt-outs`);
+  t.push(`${grandTotal.toLocaleString()} total opt-outs`);
   t.push('');
   // Non-fatal co/nnect failure is still worth a one-line note in the email.
   if (log.sourceBreakdown && log.sourceBreakdown.connectStatus === 'failed') {
@@ -550,7 +556,7 @@ export function buildRunEmail(
   h.push(`<div style="font-family:Arial,Helvetica,sans-serif;color:#0a1628;max-width:640px">`);
   h.push(`<h2 style="margin:0 0 4px">Opt-Out Sync run: ${esc(log.client)}</h2>`);
   h.push(`<p style="color:#64748b;margin:0 0 14px;font-size:13px">${esc(ranLocal)} CT</p>`);
-  h.push(`<div style="font-size:15px;margin:0 0 16px"><b style="color:#16a34a">${newTotal.toLocaleString()}</b> new opt-outs &nbsp;|&nbsp; ${log.totalCount.toLocaleString()} total opt-outs</div>`);
+  h.push(`<div style="font-size:15px;margin:0 0 16px"><b style="color:#16a34a">${newTotal.toLocaleString()}</b> new opt-outs &nbsp;|&nbsp; ${grandTotal.toLocaleString()} total opt-outs</div>`);
   // Non-fatal co/nnect failure note (only when it actually failed).
   if (log.sourceBreakdown && log.sourceBreakdown.connectStatus === 'failed') {
     h.push(`<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;margin:0 0 16px;font-size:13px;color:#b91c1c">co/nnect pull failed: ${esc(log.sourceBreakdown.connectError || 'error')}. ReadyGOP results are unaffected.</div>`);
